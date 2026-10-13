@@ -78,12 +78,6 @@ class AdbFramer {
   }
 }
 
-/// The TV refused the connection or the "Allow debugging?" prompt was not
-/// accepted in time.
-class AdbNotAuthorized extends TvException {
-  const AdbNotAuthorized(super.message);
-}
-
 /// A connection to the TV's ADB daemon, used to send keys the Android TV
 /// Remote Service ignores (input, settings, colour keys on some TVs).
 class AdbClient {

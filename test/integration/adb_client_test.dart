@@ -6,6 +6,7 @@ import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/adb/adb_client.dart';
 import 'package:haam_remote/src/adb/adb_key.dart';
+import 'package:haam_remote/src/protocol/errors.dart';
 
 import '../support/mock_adb.dart';
 import '../support/mock_tv.dart';

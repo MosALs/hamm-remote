@@ -39,3 +39,9 @@ class TvConnectionLost extends TvException {
 class TvProtocolError extends TvException {
   const TvProtocolError(super.message);
 }
+
+/// The TV refused ADB access or its "Allow debugging?" prompt was not
+/// accepted in time.
+class AdbNotAuthorized extends TvException {
+  const AdbNotAuthorized(super.message);
+}
