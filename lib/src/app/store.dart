@@ -14,6 +14,8 @@ class SavedTv {
     this.remotePort = defaultRemotePort,
     this.pairingPort = defaultPairingPort,
     this.serverFingerprint,
+    this.adbEnabled = false,
+    this.mac,
   });
 
   final String name;
@@ -24,14 +26,31 @@ class SavedTv {
   /// SHA-256 of the TV's certificate, recorded when pairing succeeded.
   final String? serverFingerprint;
 
+  /// Whether this TV allowed the phone's ADB key ("network debugging"),
+  /// used for keys the remote service ignores.
+  final bool adbEnabled;
+
+  /// The TV's MAC address, used to wake it with Wake-on-LAN.
+  final String? mac;
+
   bool get isPaired => serverFingerprint != null;
 
-  SavedTv copyWith({String? name, String? host, int? remotePort, String? serverFingerprint}) => SavedTv(
+  SavedTv copyWith({
+    String? name,
+    String? host,
+    int? remotePort,
+    String? serverFingerprint,
+    bool? adbEnabled,
+    String? mac,
+  }) =>
+      SavedTv(
         name: name ?? this.name,
         host: host ?? this.host,
         remotePort: remotePort ?? this.remotePort,
         pairingPort: pairingPort,
         serverFingerprint: serverFingerprint ?? this.serverFingerprint,
+        adbEnabled: adbEnabled ?? this.adbEnabled,
+        mac: mac ?? this.mac,
       );
 
   Map<String, Object?> toJson() => {
@@ -40,6 +59,8 @@ class SavedTv {
         'remotePort': remotePort,
         'pairingPort': pairingPort,
         'serverFingerprint': serverFingerprint,
+        'adb': adbEnabled,
+        'mac': mac,
       };
 
   static SavedTv? fromJson(Object? json) {
@@ -56,6 +77,8 @@ class SavedTv {
       remotePort: remotePort is int ? remotePort : defaultRemotePort,
       pairingPort: pairingPort is int ? pairingPort : defaultPairingPort,
       serverFingerprint: fingerprint is String ? fingerprint : null,
+      adbEnabled: json['adb'] == true,
+      mac: json['mac'] is String ? json['mac'] as String : null,
     );
   }
 }

@@ -62,6 +62,7 @@ void main() {
       expect(configured['package'], 'com.haam.remote');
       await tv.waitFor('active');
       expect(session.model, 'R4');
+      expect(session.serverMac, 'AA:BB:CC:DD:EE:0F');
       expect(session.vendor, 'TCL');
       expect(session.isOn, isTrue);
 

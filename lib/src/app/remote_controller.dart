@@ -2,12 +2,16 @@ import 'dart:async';
 
 import 'package:flutter/widgets.dart';
 
+import '../adb/adb_client.dart';
+import '../adb/adb_key.dart';
 import '../crypto/identity.dart';
 import '../protocol/errors.dart';
+import '../protocol/keycodes.dart';
 import '../protocol/messages.dart';
 import '../protocol/pairing.dart';
 import '../protocol/remote_session.dart';
 import 'store.dart';
+import 'wake_on_lan.dart';
 
 /// Connection state shown in the UI.
 enum LinkState {
@@ -31,6 +35,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     required ClientIdentity identity,
     this.connector = _defaultConnector,
     this.pairingStarter = _defaultPairingStarter,
+    this.adbConnector = _defaultAdbConnector,
   })  : _store = store,
         _identity = identity,
         _tv = store.currentTv {
@@ -51,6 +56,46 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Seam for tests.
   final Future<PairingSession> Function(SavedTv tv, ClientIdentity identity) pairingStarter;
+
+  /// Seam for tests.
+  final Future<AdbClient> Function(SavedTv tv, AdbKey key, void Function() onApprovalNeeded) adbConnector;
+
+  /// Keys the Android TV Remote Service drops on some TVs (TCL-made ones
+  /// among them). With ADB enabled they go through ADB, which delivers them
+  /// like the physical remote.
+  static const Set<int> adbKeys = {
+    KeyCode.tvInput,
+    KeyCode.settings,
+    KeyCode.tv,
+    KeyCode.tvSatellite,
+    KeyCode.tvInputHdmi1,
+    KeyCode.tvInputHdmi2,
+    KeyCode.tvInputHdmi3,
+    KeyCode.tvInputComposite1,
+    KeyCode.tvTerrestrialDigital,
+    KeyCode.tvAntennaCable,
+    KeyCode.red,
+    KeyCode.green,
+    KeyCode.yellow,
+    KeyCode.blue,
+    KeyCode.info,
+    KeyCode.guide,
+    KeyCode.captions,
+    KeyCode.mediaAudioTrack,
+    KeyCode.lastChannel,
+  };
+
+  /// Incremented when a key that needs ADB is pressed while ADB is off, so
+  /// the UI can offer to set it up.
+  final ValueNotifier<int> adbSuggestions = ValueNotifier<int>(0);
+
+  AdbClient? _adb;
+  Future<AdbClient>? _adbConnecting;
+  AdbKey? _adbKey;
+  String? _adbError;
+
+  /// The last ADB problem, shown on the remote; null when ADB is fine.
+  String? get adbError => _adbError;
 
   SavedTv? _tv;
   RemoteSession? _session;
@@ -86,6 +131,9 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   static Future<PairingSession> _defaultPairingStarter(SavedTv tv, ClientIdentity identity) =>
       PairingSession.start(host: tv.host, port: tv.pairingPort, identity: identity);
 
+  static Future<AdbClient> _defaultAdbConnector(SavedTv tv, AdbKey key, void Function() onApprovalNeeded) =>
+      AdbClient.connect(host: tv.host, key: key, onApprovalNeeded: onApprovalNeeded);
+
   // --------------------------------------------------------------------
   // TV selection and pairing
   // --------------------------------------------------------------------
@@ -97,6 +145,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     await _store.saveTv(chosen);
     await _store.setCurrentTvHost(chosen.host);
     _disconnect();
+    _closeAdb();
     _tv = chosen;
     _failures = 0;
     _set(chosen.isPaired ? LinkState.connecting : LinkState.needsPairing, null);
@@ -136,7 +185,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     await session.finish(code);
     final tv = _tv;
     if (tv == null) return;
-    final paired = tv.copyWith(serverFingerprint: session.serverFingerprint);
+    final paired = tv.copyWith(serverFingerprint: session.serverFingerprint, mac: session.serverMac);
     await _store.saveTv(paired);
     _tv = paired;
     _failures = 0;
@@ -171,6 +220,12 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       }
       _attach(session);
       _failures = 0;
+      final mac = session.serverMac;
+      if (mac != null && _tv?.mac != mac) {
+        final updated = _tv!.copyWith(mac: mac);
+        _tv = updated;
+        unawaited(_store.saveTv(updated));
+      }
       _volume = session.volume;
       _set(LinkState.connected, null);
       _runPending(session);
@@ -239,10 +294,161 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Presses [keyCode]. When disconnected, the press is kept for a few
   /// seconds and sent as soon as the connection comes back.
-  void press(int keyCode, [KeyDirection direction = KeyDirection.short]) =>
-      _run((s) => s.sendKey(keyCode, direction));
+  void press(int keyCode, [KeyDirection direction = KeyDirection.short]) {
+    if (keyCode == KeyCode.power && !isConnected) {
+      unawaited(wake());
+      return;
+    }
+    if (adbKeys.contains(keyCode) && direction == KeyDirection.short) {
+      if (_tv?.adbEnabled == true) {
+        unawaited(_adbPress(keyCode));
+        return;
+      }
+      adbSuggestions.value++;
+    }
+    _run((s) => s.sendKey(keyCode, direction));
+  }
+
+  /// Turns the TV on with Wake-on-LAN, then reconnects. Returns false when
+  /// the TV's MAC address is not known yet (it is learned when pairing).
+  Future<bool> wake() async {
+    final tv = _tv;
+    final mac = tv?.mac;
+    if (tv == null || mac == null) {
+      unawaited(connect());
+      return false;
+    }
+    try {
+      await wakeOnLan(mac, host: tv.host);
+    } on Object catch (e) {
+      _set(_state, 'Could not send the wake-up signal: $e');
+      return false;
+    }
+    if (_disposed) return true;
+    _failures = 0;
+    _set(LinkState.connecting, 'Waking the TV…');
+    // The TV needs a few seconds to bring its network service up.
+    for (final delay in const [2, 3, 4, 5]) {
+      await Future<void>.delayed(Duration(seconds: delay));
+      if (_disposed || isConnected) break;
+      await connect();
+    }
+    return true;
+  }
+
+  // --------------------------------------------------------------------
+  // ADB channel
+  // --------------------------------------------------------------------
+
+  AdbKey get _key => _adbKey ??= AdbKey.fromIdentity(_identity);
+
+  /// Connects over ADB; the TV shows "Allow debugging?" the first time.
+  /// On success ADB is remembered for this TV.
+  Future<void> enableAdb({void Function()? onApprovalNeeded}) async {
+    final tv = _tv;
+    if (tv == null) throw StateError('No TV selected');
+    _closeAdb();
+    final client = await adbConnector(tv, _key, onApprovalNeeded ?? () {});
+    if (_disposed || _tv?.host != tv.host) {
+      client.close();
+      return;
+    }
+    _adb = client;
+    _adbError = null;
+    final updated = (_tv ?? tv).copyWith(adbEnabled: true);
+    await _store.saveTv(updated);
+    _tv = updated;
+    notifyListeners();
+  }
+
+  /// Stops using ADB for this TV.
+  Future<void> disableAdb() async {
+    _closeAdb();
+    final tv = _tv;
+    if (tv == null) return;
+    final updated = SavedTv(
+      name: tv.name,
+      host: tv.host,
+      remotePort: tv.remotePort,
+      pairingPort: tv.pairingPort,
+      serverFingerprint: tv.serverFingerprint,
+      mac: tv.mac,
+    );
+    await _store.saveTv(updated);
+    _tv = updated;
+    _adbError = null;
+    notifyListeners();
+  }
+
+  Future<AdbClient> _adbClient() {
+    final open = _adb;
+    if (open != null && open.isOpen) return Future.value(open);
+    final pending = _adbConnecting;
+    if (pending != null) return pending;
+    final tv = _tv!;
+    final future = adbConnector(tv, _key, () {
+      _adbError = 'Allow debugging on the TV (tick "Always allow").';
+      notifyListeners();
+    }).then((client) {
+      _adb = client;
+      return client;
+    }).whenComplete(() => _adbConnecting = null);
+    _adbConnecting = future;
+    return future;
+  }
+
+  Future<void> _adbPress(int keyCode) => _adbShell('input keyevent $keyCode');
+
+  Future<void> _adbShell(String command) async {
+    for (var attempt = 0; attempt < 2; attempt++) {
+      try {
+        final client = await _adbClient();
+        await client.shell(command);
+        if (_adbError != null) {
+          _adbError = null;
+          notifyListeners();
+        }
+        return;
+      } on TvConnectionLost {
+        _closeAdb(); // the TV dropped an idle connection; reconnect once
+      } on TvException catch (e) {
+        _setAdbError(e.message);
+        return;
+      } on TimeoutException {
+        _closeAdb();
+        _setAdbError('The TV did not answer over ADB.');
+        return;
+      } catch (e) {
+        _closeAdb();
+        _setAdbError('ADB failed: $e');
+        return;
+      }
+    }
+    _setAdbError('Lost the ADB connection to the TV.');
+  }
+
+  void _setAdbError(String message) {
+    if (_disposed) return;
+    _adbError = message;
+    notifyListeners();
+  }
+
+  void _closeAdb() {
+    _adb?.close();
+    _adb = null;
+  }
 
   void launchApp(String link) => _run((s) => s.launchApp(link));
+
+  /// Opens [app]: by package over ADB when enabled (works for every app),
+  /// otherwise through its deep link.
+  void openApp(TvApp app) {
+    if (_tv?.adbEnabled == true) {
+      unawaited(_adbShell(app.adbLaunchCommand));
+    } else {
+      launchApp(app.launchLink);
+    }
+  }
 
   void sendText(String text) => _run((s) => s.sendText(text));
 
@@ -296,6 +502,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       case AppLifecycleState.hidden:
         _foreground = false;
         _disconnect();
+        _closeAdb();
         if (_state == LinkState.connected || _state == LinkState.offline) {
           _set(LinkState.connecting, null);
         }
@@ -316,6 +523,8 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     _disposed = true;
     WidgetsBinding.instance.removeObserver(this);
     _disconnect();
+    _closeAdb();
+    adbSuggestions.dispose();
     super.dispose();
   }
 }

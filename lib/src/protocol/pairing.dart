@@ -10,7 +10,7 @@ const int defaultPairingPort = 6467;
 /// A pairing in progress. After [start] returns, the TV shows a
 /// 6-character code; pass what the user typed to [finish].
 class PairingSession {
-  PairingSession._(this._channel, this._identity, this._server, this.serverFingerprint);
+  PairingSession._(this._channel, this._identity, this._server, this.serverFingerprint, this.serverMac);
 
   final TlsChannel _channel;
   final ClientIdentity _identity;
@@ -19,6 +19,9 @@ class PairingSession {
   /// SHA-256 of the TV's certificate. Saved after pairing so later
   /// connections can check they talk to the same TV.
   final String serverFingerprint;
+
+  /// The TV's MAC address from its certificate, for Wake-on-LAN.
+  final String? serverMac;
 
   bool get isOpen => !_channel.isClosed;
 
@@ -44,6 +47,7 @@ class PairingSession {
         identity,
         rsaPublicKeyFromCertificate(serverDer),
         sha256Hex(serverDer),
+        macFromCertificate(serverDer),
       );
       channel.send(Polo.pairingRequest(clientName));
       await session._expect(Polo.fPairingRequestAck);

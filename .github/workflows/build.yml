@@ -39,10 +39,13 @@ jobs:
           python-version: '3.12'
 
       - name: Install mock TV dependencies
-        run: pip install pyopenssl cryptography androidtvremote2
+        run: pip install pyopenssl cryptography androidtvremote2 adb-shell
 
       - name: Validate the mock TV against the reference client
-        run: set -o pipefail; python tool/mock_tv/validate_mock.py 2>&1 | tee ci-logs/validate_mock.txt
+        run: |
+          set -o pipefail
+          python tool/mock_tv/validate_mock.py 2>&1 | tee ci-logs/validate_mock.txt
+          python tool/mock_tv/validate_mock_adb.py 2>&1 | tee -a ci-logs/validate_mock.txt
 
       - uses: subosito/flutter-action@v2
         with:

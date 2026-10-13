@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app/remote_controller.dart';
 import '../protocol/keycodes.dart';
+import 'adb_setup_screen.dart';
 import 'input_sheet.dart';
 import 'keypad_sheet.dart';
 import 'pairing_screen.dart';
@@ -28,17 +29,40 @@ class _RemoteScreenState extends State<RemoteScreen> {
   String? _autoPairedHost;
   bool _pairingOpen = false;
 
+  bool _adbHintShown = false;
+
   @override
   void initState() {
     super.initState();
     c.addListener(_maybeAutoPair);
+    c.adbSuggestions.addListener(_suggestAdb);
     WidgetsBinding.instance.addPostFrameCallback((_) => _maybeAutoPair());
   }
 
   @override
   void dispose() {
     c.removeListener(_maybeAutoPair);
+    c.adbSuggestions.removeListener(_suggestAdb);
     super.dispose();
+  }
+
+  /// A TV-specific key was pressed without ADB: explain once per screen.
+  void _suggestAdb() {
+    if (!mounted || _adbHintShown) return;
+    _adbHintShown = true;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: const Text('Your TV may ignore this key over Wi-Fi. Turn on TV keys over ADB to fix it.'),
+        duration: const Duration(seconds: 6),
+        action: SnackBarAction(label: 'Set up', onPressed: () => unawaited(_openAdbSetup())),
+      ),
+    );
+  }
+
+  Future<void> _openAdbSetup() async {
+    await Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => AdbSetupScreen(controller: c)),
+    );
   }
 
   /// Opens pairing by itself the first time a never-paired TV is chosen.
@@ -70,8 +94,8 @@ class _RemoteScreenState extends State<RemoteScreen> {
           listenable: c,
           builder: (context, _) => Column(
             children: [
-              _Header(controller: c, onPair: _openPairing),
-              _StatusBanner(controller: c, onPair: _openPairing),
+              _Header(controller: c, onPair: _openPairing, onAdb: _openAdbSetup),
+              _StatusBanner(controller: c, onPair: _openPairing, onAdb: _openAdbSetup),
               Expanded(
                 child: Padding(
                   padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
@@ -94,10 +118,11 @@ class _RemoteScreenState extends State<RemoteScreen> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.controller, required this.onPair});
+  const _Header({required this.controller, required this.onPair, required this.onAdb});
 
   final RemoteController controller;
   final VoidCallback onPair;
+  final VoidCallback onAdb;
 
   @override
   Widget build(BuildContext context) {
@@ -169,6 +194,8 @@ class _Header extends StatelessWidget {
               switch (value) {
                 case 'pair':
                   onPair();
+                case 'adb':
+                  onAdb();
                 case 'switch':
                   await controller.switchTv();
                 case 'forget':
@@ -176,10 +203,14 @@ class _Header extends StatelessWidget {
                   if (host != null) await controller.forgetTv(host);
               }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'pair', child: Text('Pair again')),
-              PopupMenuItem(value: 'switch', child: Text('Switch TV')),
-              PopupMenuItem(value: 'forget', child: Text('Forget this TV')),
+            itemBuilder: (_) => [
+              PopupMenuItem(
+                value: 'adb',
+                child: Text(controller.tv?.adbEnabled == true ? 'TV keys over ADB: on' : 'Fix TV keys (ADB)'),
+              ),
+              const PopupMenuItem(value: 'pair', child: Text('Pair again')),
+              const PopupMenuItem(value: 'switch', child: Text('Switch TV')),
+              const PopupMenuItem(value: 'forget', child: Text('Forget this TV')),
             ],
           ),
         ],
@@ -189,10 +220,11 @@ class _Header extends StatelessWidget {
 }
 
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.controller, required this.onPair});
+  const _StatusBanner({required this.controller, required this.onPair, required this.onAdb});
 
   final RemoteController controller;
   final VoidCallback onPair;
+  final VoidCallback onAdb;
 
   @override
   Widget build(BuildContext context) {
@@ -203,11 +235,23 @@ class _StatusBanner extends StatelessWidget {
           action: 'Pair',
           onAction: onPair,
         ),
+      LinkState.offline when controller.tv?.mac != null => _banner(
+          icon: Icons.power_settings_new_rounded,
+          text: 'The TV is off or unreachable.',
+          action: 'Turn on',
+          onAction: () => unawaited(controller.wake()),
+        ),
       LinkState.offline => _banner(
           icon: Icons.wifi_off_rounded,
           text: controller.message ?? 'Can\'t reach the TV.',
           action: 'Retry',
           onAction: () => unawaited(controller.connect()),
+        ),
+      LinkState.connected when controller.adbError != null => _banner(
+          icon: Icons.developer_mode_rounded,
+          text: controller.adbError!,
+          action: 'Fix',
+          onAction: onAdb,
         ),
       _ => null,
     };
@@ -384,7 +428,7 @@ class _RemoteBody extends StatelessWidget {
           childAspectRatio: 3.9,
           children: [
             for (final app in TvApp.values)
-              _AppKey(app: app, onPress: () => controller.launchApp(app.launchLink)),
+              _AppKey(app: app, onPress: () => controller.openApp(app)),
           ],
         ),
       ],

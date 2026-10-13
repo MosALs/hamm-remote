@@ -51,17 +51,21 @@ abstract final class KeyCode {
   }
 }
 
-/// Apps on the TV, opened with deep links. Launching by package name
-/// (`market://launch?id=...`) no longer works for most apps since a Play
-/// Store change, while the apps' own links still do.
+/// Apps on the TV. Without ADB they open through deep links (launching by
+/// package name over the remote link stopped working after a Play Store
+/// change); with ADB they are started by package, like from the home screen.
 enum TvApp {
-  netflix('Netflix', 'netflix://'),
-  youtube('YouTube', 'https://www.youtube.com'),
-  primeVideo('Prime Video', 'https://app.primevideo.com'),
-  shahid('Shahid', 'https://shahid.mbc.net');
+  netflix('Netflix', 'com.netflix.ninja', 'netflix://'),
+  youtube('YouTube', 'com.google.android.youtube.tv', 'https://www.youtube.com'),
+  primeVideo('Prime Video', 'com.amazon.amazonvideo.livingroom', 'https://app.primevideo.com'),
+  shahid('Shahid', 'net.mbc.shahidTV', 'https://shahid.mbc.net');
 
-  const TvApp(this.label, this.launchLink);
+  const TvApp(this.label, this.packageName, this.launchLink);
 
   final String label;
+  final String packageName;
   final String launchLink;
+
+  /// ADB shell command that starts the app's TV launcher activity.
+  String get adbLaunchCommand => 'monkey -p $packageName -c android.intent.category.LEANBACK_LAUNCHER 1';
 }

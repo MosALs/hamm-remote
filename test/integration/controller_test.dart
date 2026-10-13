@@ -2,12 +2,14 @@ import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:haam_remote/src/adb/adb_client.dart';
 import 'package:haam_remote/src/app/remote_controller.dart';
 import 'package:haam_remote/src/app/store.dart';
 import 'package:haam_remote/src/crypto/identity.dart';
 import 'package:haam_remote/src/protocol/keycodes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import '../support/mock_adb.dart';
 import '../support/mock_tv.dart';
 import '../support/test_identity.dart';
 
@@ -76,5 +78,53 @@ void main() {
     addTearDown(tv.close);
     await controller.selectTv(controller.tv!.copyWith(remotePort: tv.remotePort));
     await waitUntil(() => controller.state == LinkState.needsPairing);
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('TV-specific keys and apps go over ADB once it is enabled', () async {
+    SharedPreferences.setMockInitialValues({});
+    final tv = await MockTv.start();
+    addTearDown(tv.close);
+    final adb = await MockAdb.start();
+    addTearDown(adb.close);
+    final store = await AppStore.open();
+    final controller = RemoteController(
+      store: store,
+      identity: identity,
+      adbConnector: (_, key, onApproval) =>
+          AdbClient.connect(host: '127.0.0.1', port: adb.port, key: key, onApprovalNeeded: onApproval),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.selectTv(SavedTv(
+      name: 'Living room',
+      host: '127.0.0.1',
+      remotePort: tv.remotePort,
+      pairingPort: tv.pairPort,
+    ));
+    final pairing = await controller.startPairing();
+    await controller.finishPairing(pairing, (await tv.waitFor('pairing_code'))['code'] as String);
+    expect(controller.tv!.mac, 'AA:BB:CC:DD:EE:0F');
+
+    // Without ADB the key goes over the remote link and the UI is told.
+    controller.press(KeyCode.settings);
+    expect((await tv.waitFor('key'))['code'], KeyCode.settings);
+    expect(controller.adbSuggestions.value, 1);
+
+    var asked = false;
+    await controller.enableAdb(onApprovalNeeded: () => asked = true);
+    expect(asked, isTrue);
+    expect(store.currentTv!.adbEnabled, isTrue);
+
+    controller.press(KeyCode.tvSatellite);
+    expect((await adb.waitFor('shell'))['command'], 'input keyevent ${KeyCode.tvSatellite}');
+    controller.press(KeyCode.yellow);
+    expect((await adb.waitFor('shell'))['command'], 'input keyevent ${KeyCode.yellow}');
+    controller.openApp(TvApp.shahid);
+    expect((await adb.waitFor('shell'))['command'], TvApp.shahid.adbLaunchCommand);
+
+    // Ordinary keys still use the remote link.
+    controller.press(KeyCode.dpadUp);
+    expect((await tv.waitFor('key'))['code'], KeyCode.dpadUp);
+    expect(controller.adbError, isNull);
   }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
 }

@@ -131,6 +131,23 @@ RsaPublicNumbers rsaPublicKeyFromCertificate(List<int> der) {
   return RsaPublicNumbers(rsaKey[0].unsignedInteger, rsaKey[1].unsignedInteger);
 }
 
+/// The TV's Wi-Fi/Ethernet MAC address, which Android TVs put at the end of
+/// their certificate's common name (`atvremote/<model>/<MAC>`). Used for
+/// Wake-on-LAN. Returns null when the certificate has none.
+String? macFromCertificate(List<int> der) {
+  try {
+    final fields = DerNode.parse(der).children.first.children;
+    final base = fields.first.tag == 0xA0 ? 1 : 0;
+    final subject = fields[base + 4];
+    final text = latin1.decode(subject.content, allowInvalid: true);
+    final matches = RegExp(r'([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}').allMatches(text).toList();
+    if (matches.isEmpty) return null;
+    return matches.last.group(0)!.toUpperCase().replaceAll('-', ':');
+  } on Object {
+    return null;
+  }
+}
+
 /// Computes the pairing secret for the 6-hex-digit [code] shown on the TV.
 ///
 /// The TV hashes, with SHA-256, the client modulus, client exponent, server

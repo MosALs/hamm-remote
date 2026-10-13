@@ -173,7 +173,7 @@ def emit(event: str, **data: object) -> None:
 
 def make_server_identity() -> tuple[bytes, bytes, x509.Certificate]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "atvremote/mock/R4")])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "atvremote/R4/R4/AA:BB:CC:DD:EE:0F")])
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()

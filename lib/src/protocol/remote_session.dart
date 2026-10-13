@@ -70,6 +70,9 @@ class RemoteSession {
 
   String? model;
   String? vendor;
+
+  /// The TV's MAC address from its certificate, for Wake-on-LAN.
+  String? serverMac;
   bool isOn = true;
   VolumeInfo? volume;
   String? currentApp;
@@ -102,7 +105,8 @@ class RemoteSession {
       channel.close();
       throw const TvNeedsPairing('The TV identity changed (it may have been reset).');
     }
-    final session = RemoteSession._(channel, idleTimeout, packageName, appVersion);
+    final session = RemoteSession._(channel, idleTimeout, packageName, appVersion)
+      ..serverMac = serverDer == null ? null : macFromCertificate(serverDer);
     session._start();
     try {
       await Future.any<void>([
