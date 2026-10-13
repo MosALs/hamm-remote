@@ -39,6 +39,19 @@ class Mock:
         ready = self.wait("ready")
         self.pair_port = ready["pair_port"]
         self.remote_port = ready["remote_port"]
+        self.wol_port = ready["wol_port"]
+
+    def command(self, line: str) -> None:
+        assert self.proc.stdin
+        self.proc.stdin.write(line + "\n")
+        self.proc.stdin.flush()
+
+    def magic_packet(self, mac: str) -> None:
+        import socket
+
+        payload = b"\xff" * 6 + bytes.fromhex(mac.replace(":", "")) * 16
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+            sock.sendto(payload, ("127.0.0.1", self.wol_port))
 
     def _read(self) -> None:
         assert self.proc.stdout
@@ -123,6 +136,37 @@ async def main() -> None:
         except Exception as exc:  # androidtvremote2 wraps the TV's error status
             rejected = "status" in str(exc).lower() or "closed" in type(exc).__name__.lower()
         assert rejected, "wrong code accepted"
+
+        # Power state follows the power and wake-up keys, as on a real TV.
+        assert remote.is_on is True, remote.is_on
+        remote.send_key_command("POWER")
+        assert (await asyncio.to_thread(mock.wait, "power"))["on"] is False
+        await asyncio.sleep(0.3)
+        assert remote.is_on is False, remote.is_on
+        remote.send_key_command("WAKEUP")
+        assert (await asyncio.to_thread(mock.wait, "power"))["on"] is True
+        await asyncio.sleep(0.3)
+        assert remote.is_on is True, remote.is_on
+        remote.disconnect()
+
+        # Deep sleep: nothing answers until a magic packet for the right MAC.
+        mock.command("sleep")
+        await asyncio.to_thread(mock.wait, "asleep")
+        try:
+            await remote.async_connect()
+            raise AssertionError("a sleeping TV accepted a connection")
+        except CannotConnect:
+            pass
+        mock.magic_packet("AA:BB:CC:DD:EE:99")
+        await asyncio.to_thread(mock.wait, "wrong_magic_packet")
+        mock.magic_packet("AA:BB:CC:DD:EE:0F")
+        awake = await asyncio.to_thread(mock.wait, "awake")
+        assert awake["screen_on"] is False, awake
+        await remote.async_connect()
+        await asyncio.sleep(0.3)
+        assert remote.is_on is False, remote.is_on
+        remote.send_key_command("WAKEUP")
+        assert (await asyncio.to_thread(mock.wait, "power"))["on"] is True
 
         remote.disconnect()
         print("mock TV validated against androidtvremote2: OK")

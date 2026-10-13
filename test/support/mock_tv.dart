@@ -23,6 +23,9 @@ class MockTv {
   late final int pairPort;
   late final int remotePort;
 
+  /// UDP port where the mock listens for Wake-on-LAN magic packets.
+  late final int wolPort;
+
   /// Why the mock cannot run here, or null when it can.
   static String? unavailableReason() {
     try {
@@ -33,7 +36,10 @@ class MockTv {
     }
   }
 
-  static Future<MockTv> start({double pingInterval = 0.5}) async {
+  /// [standby] starts with the screen off. [wakeMac] is the MAC a magic
+  /// packet must carry to wake the TV from deep sleep (its Wi-Fi MAC); by
+  /// default the one in its certificate.
+  static Future<MockTv> start({double pingInterval = 0.5, bool standby = false, String? wakeMac}) async {
     final script = File('tool/mock_tv/mock_tv.py').absolute.path;
     final process = await Process.start('python3', [
       script,
@@ -43,11 +49,14 @@ class MockTv {
       '0',
       '--ping-interval',
       '$pingInterval',
+      if (standby) '--standby',
+      if (wakeMac != null) ...['--wake-mac', wakeMac],
     ]);
     final tv = MockTv._(process);
     final ready = await tv.waitFor('ready');
     tv.pairPort = ready['pair_port'] as int;
     tv.remotePort = ready['remote_port'] as int;
+    tv.wolPort = ready['wol_port'] as int;
     return tv;
   }
 
@@ -73,6 +82,14 @@ class MockTv {
 
   /// All events seen so far (for assertions on what did NOT happen).
   List<Map<String, dynamic>> get events => List.unmodifiable(_events);
+
+  /// Deep sleep, like a TV that has been off for a while: its connections
+  /// drop and nothing answers until a magic packet for its MAC arrives.
+  Future<void> sleep() async {
+    _process.stdin.writeln('sleep');
+    await _process.stdin.flush();
+    await waitFor('asleep');
+  }
 
   Future<void> close() async {
     await _process.stdin.close();

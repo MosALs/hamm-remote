@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/adb/adb_client.dart';
 import 'package:haam_remote/src/app/remote_controller.dart';
 import 'package:haam_remote/src/app/store.dart';
+import 'package:haam_remote/src/app/wake_on_lan.dart';
 import 'package:haam_remote/src/crypto/identity.dart';
 import 'package:haam_remote/src/protocol/keycodes.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -126,5 +127,73 @@ void main() {
     controller.press(KeyCode.dpadUp);
     expect((await tv.waitFor('key'))['code'], KeyCode.dpadUp);
     expect(controller.adbError, isNull);
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('turns on a TV in deep sleep, using the Wi-Fi MAC learned over ADB', () async {
+    SharedPreferences.setMockInitialValues({});
+    // Like the user's TV: its Wi-Fi MAC is not the one in its certificate.
+    final tv = await MockTv.start(wakeMac: 'AA:BB:CC:DD:EE:10');
+    addTearDown(tv.close);
+    final adb = await MockAdb.start();
+    addTearDown(adb.close);
+    final store = await AppStore.open();
+    final sent = <List<String>>[];
+    final controller = RemoteController(
+      store: store,
+      identity: identity,
+      adbConnector: (_, key, onApproval) =>
+          AdbClient.connect(host: '127.0.0.1', port: adb.port, key: key, onApprovalNeeded: onApproval),
+      // Real magic packets, sent to the mock instead of the broadcast address.
+      wakeSender: (macs, _) {
+        sent.add(macs);
+        return wakeOnLan(macs, host: '127.0.0.1', ports: [tv.wolPort], broadcast: false);
+      },
+      wakeWindow: const Duration(seconds: 6),
+    );
+    addTearDown(controller.dispose);
+
+    await controller.selectTv(SavedTv(
+      name: 'Living room',
+      host: '127.0.0.1',
+      remotePort: tv.remotePort,
+      pairingPort: tv.pairPort,
+    ));
+    final pairing = await controller.startPairing();
+    await controller.finishPairing(pairing, (await tv.waitFor('pairing_code'))['code'] as String);
+    await waitUntil(() => controller.isConnected);
+
+    // Just turned off: the network is still up, so power goes over the link.
+    controller.press(KeyCode.power);
+    expect((await tv.waitFor('power'))['on'], isFalse);
+    controller.press(KeyCode.power);
+    expect((await tv.waitFor('power'))['on'], isTrue);
+    controller.press(KeyCode.power);
+    expect((await tv.waitFor('power'))['on'], isFalse);
+
+    // Off for a while: deep sleep. The certificate's MAC does not wake it,
+    // which is what the user saw.
+    await tv.sleep();
+    await waitUntil(() => !controller.isConnected);
+    expect(await controller.wake(), isTrue);
+    expect(controller.wakeFailed, isTrue);
+    expect(sent.last, ['AA:BB:CC:DD:EE:0F']);
+    expect((await tv.waitFor('wrong_magic_packet'))['mac'], 'AA:BB:CC:DD:EE:0F');
+    expect(tv.events.where((e) => e['event'] == 'awake'), isEmpty);
+
+    // With ADB on, the app learns the TV's real interface addresses...
+    await controller.enableAdb();
+    expect(controller.tv!.interfaceMacs, ['AA:BB:CC:DD:EE:0F', 'AA:BB:CC:DD:EE:10']);
+    expect(store.currentTv!.interfaceMacs, ['AA:BB:CC:DD:EE:0F', 'AA:BB:CC:DD:EE:10']);
+
+    // ...and the power button now wakes the network, reconnects, and turns
+    // the screen on.
+    controller.press(KeyCode.power);
+    await tv.waitFor('magic_packet');
+    expect((await tv.waitFor('awake'))['screen_on'], isFalse);
+    expect((await tv.waitFor('key'))['code'], KeyCode.power);
+    expect((await tv.waitFor('power'))['on'], isTrue);
+    await waitUntil(() => controller.isConnected && !controller.isWaking);
+    expect(controller.wakeFailed, isFalse);
+    expect(sent.last, ['AA:BB:CC:DD:EE:0F', 'AA:BB:CC:DD:EE:10']);
   }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
 }

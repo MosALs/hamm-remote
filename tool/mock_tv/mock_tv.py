@@ -171,9 +171,13 @@ def emit(event: str, **data: object) -> None:
         sys.stdout.flush()
 
 
+# The MAC the TV puts in its certificate (not always the interface in use).
+SERVER_MAC = "AA:BB:CC:DD:EE:0F"
+
+
 def make_server_identity() -> tuple[bytes, bytes, x509.Certificate]:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "atvremote/R4/R4/AA:BB:CC:DD:EE:0F")])
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, f"atvremote/R4/R4/{SERVER_MAC}")])
     now = datetime.datetime.now(datetime.timezone.utc)
     cert = (
         x509.CertificateBuilder()
@@ -228,6 +232,13 @@ class MockTv:
         self.volume = 12
         self.muted = False
         self.lock = threading.Lock()
+        # Screen on/off as the remote protocol reports it ("standby" keeps the
+        # network up with the screen off).
+        self.powered = not args.standby
+        # Deep sleep: the network is off, nothing answers until a magic packet.
+        self.listeners: list[socket.socket] = []
+        self.clients: set[socket.socket] = set()
+        self.ports: tuple[int, int] = (args.pair_port, args.remote_port)
 
     # -- TLS ------------------------------------------------------------
     def _context(self, paired_only: bool) -> SSL.Context:
@@ -255,10 +266,65 @@ class MockTv:
 
     def _accept_loop(self, sock: socket.socket, handler) -> None:
         while True:
-            raw, addr = sock.accept()
+            try:
+                raw, addr = sock.accept()
+            except OSError:
+                return  # listener closed: the TV went to deep sleep
+            with self.lock:
+                self.clients.add(raw)
             threading.Thread(target=self._serve, args=(raw, handler), daemon=True).start()
 
+    def _start_listening(self) -> None:
+        pair_sock = self._listen(self.ports[0])
+        remote_sock = self._listen(self.ports[1])
+        self.ports = (pair_sock.getsockname()[1], remote_sock.getsockname()[1])
+        self.listeners = [pair_sock, remote_sock]
+        threading.Thread(target=self._accept_loop, args=(pair_sock, self.handle_pairing), daemon=True).start()
+        threading.Thread(target=self._accept_loop, args=(remote_sock, self.handle_remote), daemon=True).start()
+
+    def sleep(self) -> None:
+        """Deep sleep, like a TV that has been off for a while: the screen and
+        the network go down, so connections are refused."""
+        with self.lock:
+            self.powered = False
+            listeners, self.listeners = self.listeners, []
+            clients, self.clients = self.clients, set()
+        for sock in [*listeners, *clients]:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+        emit("asleep")
+
+    def wake_network(self) -> None:
+        """A magic packet arrived: the network comes back, the screen stays
+        off until a power or wake-up key."""
+        if self.listeners:
+            return
+        self._start_listening()
+        emit("awake", screen_on=self.powered)
+
+    def _wol_loop(self, sock: socket.socket) -> None:
+        mac = bytes.fromhex(self.args.wake_mac.replace(":", ""))
+        while True:
+            data, _ = sock.recvfrom(1024)
+            if len(data) >= 102 and data[:6] == b"\xff" * 6 and data[6:102] == mac * 16:
+                emit("magic_packet", mac=self.args.wake_mac)
+                self.wake_network()
+            else:
+                emit("wrong_magic_packet", mac=data[6:12].hex(":").upper() if len(data) >= 12 else "")
+
     def _serve(self, raw: socket.socket, handler) -> None:
+        try:
+            self._serve_tls(raw, handler)
+        except OSError:
+            pass  # dropped by sleep()
+        finally:
+            with self.lock:
+                self.clients.discard(raw)
+
+    def _serve_tls(self, raw: socket.socket, handler) -> None:
         conn = SSL.Connection(self._context(paired_only=handler == self.handle_remote), raw)
         conn.set_accept_state()
         try:
@@ -387,7 +453,7 @@ class MockTv:
                     ch.send(encode([(2, [(1, FEATURES)])]))
                 elif 2 in msg:  # remote_set_active reply
                     emit("active", features=first(decode(first(msg, 2)), 1, 0))
-                    ch.send(encode([(40, [(1, True)])]))
+                    ch.send(encode([(40, [(1, self.powered)])]))
                     ch.send(self._volume_msg())
                 elif 9 in msg:  # ping response
                     pong["last"] = time.monotonic()
@@ -397,6 +463,11 @@ class MockTv:
                     code = first(key, 1, 0)
                     direction = first(key, 2, 0)
                     emit("key", code=code, direction=direction)
+                    if direction in (3, 1) and code in (26, 224, 223):  # power, wakeup, sleep
+                        with self.lock:
+                            self.powered = code == 224 or (code == 26 and not self.powered)
+                        emit("power", on=self.powered)
+                        ch.send(encode([(40, [(1, self.powered)])]))
                     if direction in (3, 1) and code in (24, 25, 164):
                         with self.lock:
                             if code == 24:
@@ -421,15 +492,17 @@ class MockTv:
 
     # -- Main -----------------------------------------------------------
     def run(self) -> None:
-        pair_sock = self._listen(self.args.pair_port)
-        remote_sock = self._listen(self.args.remote_port)
-        threading.Thread(target=self._accept_loop, args=(pair_sock, self.handle_pairing), daemon=True).start()
-        threading.Thread(target=self._accept_loop, args=(remote_sock, self.handle_remote), daemon=True).start()
-        emit("ready", pair_port=pair_sock.getsockname()[1], remote_port=remote_sock.getsockname()[1])
+        self._start_listening()
+        wol = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        wol.bind((self.args.host, self.args.wol_port))
+        threading.Thread(target=self._wol_loop, args=(wol,), daemon=True).start()
+        emit("ready", pair_port=self.ports[0], remote_port=self.ports[1], wol_port=wol.getsockname()[1])
         try:
-            # Exit when stdin closes so test harnesses never leak the process.
-            for _ in sys.stdin:
-                pass
+            # Commands on stdin; exit when stdin closes so test harnesses
+            # never leak the process.
+            for line in sys.stdin:
+                if line.strip() == "sleep":
+                    self.sleep()
         except KeyboardInterrupt:
             pass
         os._exit(0)
@@ -441,6 +514,9 @@ def main() -> None:
     parser.add_argument("--pair-port", type=int, default=6467)
     parser.add_argument("--remote-port", type=int, default=6466)
     parser.add_argument("--ping-interval", type=float, default=5.0)
+    parser.add_argument("--standby", action="store_true", help="start with the screen off (network still up)")
+    parser.add_argument("--wol-port", type=int, default=0, help="UDP port for magic packets (0 = any free port)")
+    parser.add_argument("--wake-mac", default=SERVER_MAC, help="MAC the magic packet must carry to wake the TV")
     MockTv(parser.parse_args()).run()
 
 

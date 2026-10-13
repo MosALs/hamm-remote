@@ -57,6 +57,22 @@ def emit(event: str, **data: object) -> None:
         sys.stdout.flush()
 
 
+# Network interfaces of the simulated TV. The Wi-Fi MAC differs from the one
+# in the remote service's certificate, as it can on real TVs.
+INTERFACES = "1: lo: <LOOPBACK,UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT\\    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00\n" \
+    "2: eth0: <BROADCAST,MULTICAST> mtu 1500 qdisc mq state DOWN mode DEFAULT\\    link/ether aa:bb:cc:dd:ee:0f brd ff:ff:ff:ff:ff:ff\n" \
+    "3: wlan0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc mq state UP mode DORMANT\\    link/ether aa:bb:cc:dd:ee:10 brd ff:ff:ff:ff:ff:ff\n" \
+    "4: p2p0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT\\    link/ether ae:bb:cc:dd:ee:10 brd ff:ff:ff:ff:ff:ff\n"
+
+
+def shell_output(command: str) -> bytes:
+    """What the simulated device prints for a shell command (most print nothing)."""
+    if command.startswith("ip -o link"):
+        # Like the real shell: the `ip` listing, then the sysfs fallback lines.
+        return (INTERFACES + "wlan0 aa:bb:cc:dd:ee:10\neth0 aa:bb:cc:dd:ee:0f\n").encode()
+    return b""
+
+
 def decode_android_pubkey(text: bytes) -> rsa.RSAPublicKey:
     """Parse Android's mincrypt RSAPublicKey struct (base64, then ' comment')."""
     b64 = text.split(b"\0")[0].split(b" ")[0]
@@ -166,8 +182,12 @@ class MockAdb:
                     if not destination.startswith("shell:"):
                         conn.send(CLSE, 0, remote_id)
                         continue
-                    emit("shell", command=destination[len("shell:"):])
+                    command_line = destination[len("shell:"):]
+                    emit("shell", command=command_line)
                     conn.send(OKAY, local_ids, remote_id)
+                    output = shell_output(command_line)
+                    if output:
+                        conn.send(WRTE, local_ids, remote_id, output)
                     conn.send(CLSE, local_ids, remote_id)
                 elif command in (OKAY, CLSE, WRTE):
                     if command == WRTE:

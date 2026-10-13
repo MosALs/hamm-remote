@@ -105,6 +105,9 @@ def main() -> None:
         assert wait("connected")["known_key"] is True
         device.shell("input keyevent 176")
         assert wait("shell")["command"] == "input keyevent 176"
+        # Commands with output (the network interface list) arrive intact.
+        links = device.shell("ip -o link")
+        assert "wlan0:" in links and "link/ether aa:bb:cc:dd:ee:10" in links, links
         device.close()
         print("mock ADB device validated against adb_shell: OK")
     finally:

@@ -12,6 +12,8 @@ abstract final class KeyCode {
   static const int volumeUp = 24;
   static const int volumeDown = 25;
   static const int power = 26;
+  static const int sleep = 223;
+  static const int wakeup = 224;
   static const int enter = 66;
   static const int del = 67;
   static const int menu = 82;

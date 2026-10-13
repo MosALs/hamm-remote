@@ -11,6 +11,7 @@ import 'tabs/cast_tab.dart';
 import 'tabs/keypad_tab.dart';
 import 'tabs/remote_tab.dart';
 import 'theme.dart';
+import 'wake_help_sheet.dart';
 import 'widgets/press_target.dart';
 
 /// The remote: a header with the TV and power, four tabs, and a tab bar.
@@ -95,6 +96,8 @@ class _RemoteScreenState extends State<RemoteScreen> {
         await _openPairing();
       case 'adb':
         await _openAdbSetup();
+      case 'wake':
+        if (mounted) await showWakeHelpSheet(context, c);
       case 'switch':
         await c.switchTv();
       case 'forget':
@@ -128,7 +131,12 @@ class _RemoteScreenState extends State<RemoteScreen> {
             builder: (context, _) => Column(
               children: [
                 _Header(controller: c, onMenu: _openTvMenu),
-                _StatusBanner(controller: c, onPair: _openPairing, onAdb: _openAdbSetup),
+                _StatusBanner(
+                  controller: c,
+                  onPair: _openPairing,
+                  onAdb: _openAdbSetup,
+                  onWakeHelp: () => unawaited(showWakeHelpSheet(context, c)),
+                ),
                 Expanded(
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
@@ -306,6 +314,7 @@ class _TvMenu extends StatelessWidget {
             adbOn ? 'TV keys over ADB: on' : 'Fix TV keys (ADB)',
             'Input, Settings, sources and coloured keys',
           ),
+          item('wake', Icons.power_settings_new_rounded, 'Turning on from the phone', 'If the TV won\'t turn on'),
           item('pair', Icons.link_rounded, 'Pair again', 'If the TV stopped responding'),
           item('switch', Icons.swap_horiz_rounded, 'Switch TV', 'Pick another TV'),
           item('forget', Icons.delete_outline_rounded, 'Forget this TV', 'Remove it from this phone', color: Palette.red),
@@ -383,11 +392,12 @@ class _TabBar extends StatelessWidget {
 }
 
 class _StatusBanner extends StatelessWidget {
-  const _StatusBanner({required this.controller, required this.onPair, required this.onAdb});
+  const _StatusBanner({required this.controller, required this.onPair, required this.onAdb, required this.onWakeHelp});
 
   final RemoteController controller;
   final VoidCallback onPair;
   final VoidCallback onAdb;
+  final VoidCallback onWakeHelp;
 
   @override
   Widget build(BuildContext context) {
@@ -398,7 +408,13 @@ class _StatusBanner extends StatelessWidget {
           action: 'Pair',
           onAction: onPair,
         ),
-      LinkState.offline when controller.tv?.mac != null => _banner(
+      LinkState.offline when controller.wakeFailed => _banner(
+          icon: Icons.power_settings_new_rounded,
+          text: 'The TV didn\'t wake up. A TV setting can fix this.',
+          action: 'Fix',
+          onAction: onWakeHelp,
+        ),
+      LinkState.offline when controller.tv?.wakeMacs.isNotEmpty ?? false => _banner(
           icon: Icons.power_settings_new_rounded,
           text: 'The TV is off or unreachable.',
           action: 'Turn on',

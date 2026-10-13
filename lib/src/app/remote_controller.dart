@@ -36,6 +36,8 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     this.connector = _defaultConnector,
     this.pairingStarter = _defaultPairingStarter,
     this.adbConnector = _defaultAdbConnector,
+    this.wakeSender = _defaultWakeSender,
+    this.wakeWindow = const Duration(seconds: 45),
   })  : _store = store,
         _identity = identity,
         _tv = store.currentTv {
@@ -59,6 +61,13 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Seam for tests.
   final Future<AdbClient> Function(SavedTv tv, AdbKey key, void Function() onApprovalNeeded) adbConnector;
+
+  /// Seam for tests: sends one round of wake-up packets.
+  final Future<void> Function(List<String> macs, String host) wakeSender;
+
+  /// How long [wake] keeps signalling and trying to reach the TV. Waking
+  /// from deep sleep can take a TV half a minute.
+  final Duration wakeWindow;
 
   /// Keys the Android TV Remote Service drops on some TVs (TCL-made ones
   /// among them). With ADB enabled they go through ADB, which delivers them
@@ -108,6 +117,9 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void>? _connecting;
   Timer? _retry;
   int _failures = 0;
+  Future<bool>? _waking;
+  DateTime? _wakeUntil;
+  bool _wakeFailed = false;
   void Function(RemoteSession session)? _pendingAction;
   Timer? _pendingExpiry;
 
@@ -116,6 +128,12 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   String? get message => _message;
   VolumeInfo? get volume => _volume;
   bool get isConnected => _state == LinkState.connected;
+
+  /// True while [wake] is signalling the TV.
+  bool get isWaking => _waking != null;
+
+  /// The last [wake] ended without reaching the TV.
+  bool get wakeFailed => _wakeFailed;
   bool get supportsText => _session?.supportsText ?? false;
   List<SavedTv> get savedTvs => _store.loadTvs();
   ClientIdentity get identity => _identity;
@@ -130,6 +148,8 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   static Future<PairingSession> _defaultPairingStarter(SavedTv tv, ClientIdentity identity) =>
       PairingSession.start(host: tv.host, port: tv.pairingPort, identity: identity);
+
+  static Future<void> _defaultWakeSender(List<String> macs, String host) => wakeOnLan(macs, host: host);
 
   static Future<AdbClient> _defaultAdbConnector(SavedTv tv, AdbKey key, void Function() onApprovalNeeded) =>
       AdbClient.connect(host: tv.host, key: key, onApprovalNeeded: onApprovalNeeded);
@@ -227,7 +247,9 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
         unawaited(_store.saveTv(updated));
       }
       _volume = session.volume;
+      _wakeFailed = false;
       _set(LinkState.connected, null);
+      _ensureAwake(session);
       _runPending(session);
     } on TvNeedsPairing catch (e) {
       _clearPending();
@@ -258,6 +280,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
           _volume = volume;
           notifyListeners();
         case PowerChanged():
+          _ensureAwake(session);
           notifyListeners();
         case CurrentAppChanged():
           break;
@@ -309,31 +332,85 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     _run((s) => s.sendKey(keyCode, direction));
   }
 
-  /// Turns the TV on with Wake-on-LAN, then reconnects. Returns false when
-  /// the TV's MAC address is not known yet (it is learned when pairing).
-  Future<bool> wake() async {
+  /// Turns the TV on from the phone.
+  ///
+  /// A TV that was just turned off still has its network up, and the power
+  /// key goes over the remote link. After a while it sleeps deeply and only a
+  /// Wake-on-LAN packet reaches it, so this sends one to every known MAC each
+  /// second while trying to reconnect, then presses power if the TV came
+  /// back with its screen still off. Returns false when no MAC is known yet
+  /// (it is learned when pairing, and over ADB).
+  Future<bool> wake() {
+    final running = _waking;
+    if (running != null) return running;
     final tv = _tv;
-    final mac = tv?.mac;
-    if (tv == null || mac == null) {
+    final macs = tv?.wakeMacs ?? const <String>[];
+    if (tv == null || macs.isEmpty) {
       unawaited(connect());
-      return false;
+      return Future.value(false);
     }
+    final future = _wake(tv, macs).whenComplete(() {
+      _waking = null;
+      if (!_disposed) notifyListeners();
+    });
+    _waking = future;
+    return future;
+  }
+
+  Future<bool> _wake(SavedTv tv, List<String> macs) async {
+    _retry?.cancel();
+    _failures = 0;
+    _wakeFailed = false;
+    final deadline = DateTime.now().add(wakeWindow);
+    _wakeUntil = deadline;
+    _set(LinkState.connecting, 'Waking the TV…');
+
+    var sendError = '';
+    Future<void> pulse() async {
+      try {
+        await wakeSender(macs, tv.host);
+      } on Object catch (e) {
+        sendError = '$e';
+      }
+    }
+
+    await pulse();
+    final pulses = Timer.periodic(const Duration(seconds: 1), (_) => unawaited(pulse()));
     try {
-      await wakeOnLan(mac, host: tv.host);
-    } on Object catch (e) {
-      _set(_state, 'Could not send the wake-up signal: $e');
-      return false;
+      while (!_disposed && _tv?.host == tv.host && DateTime.now().isBefore(deadline)) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+        if (_disposed || isConnected) break;
+        await connect();
+        if (_disposed || isConnected) break;
+        _retry?.cancel(); // this loop does the retrying while waking
+        _set(LinkState.connecting, 'Waking the TV…');
+      }
+    } finally {
+      pulses.cancel();
     }
     if (_disposed) return true;
-    _failures = 0;
-    _set(LinkState.connecting, 'Waking the TV…');
-    // The TV needs a few seconds to bring its network service up.
-    for (final delay in const [2, 3, 4, 5]) {
-      await Future<void>.delayed(Duration(seconds: delay));
-      if (_disposed || isConnected) break;
-      await connect();
-    }
+    if (isConnected) return true;
+    _wakeUntil = null;
+    _wakeFailed = true;
+    _set(
+      LinkState.offline,
+      sendError.isNotEmpty ? 'Could not send the wake-up signal: $sendError' : 'The TV did not wake up.',
+    );
+    _scheduleRetry();
     return true;
+  }
+
+  /// While waking, a TV that answers with its screen off gets the power key.
+  /// (A session is ready only once the TV has reported its power state.)
+  void _ensureAwake(RemoteSession session) {
+    final until = _wakeUntil;
+    if (until == null || !identical(session, _session)) return;
+    if (DateTime.now().isAfter(until)) {
+      _wakeUntil = null;
+      return;
+    }
+    _wakeUntil = null;
+    if (!session.isOn) session.sendKey(KeyCode.power, KeyDirection.short);
   }
 
   // --------------------------------------------------------------------
@@ -359,6 +436,24 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     await _store.saveTv(updated);
     _tv = updated;
     notifyListeners();
+    await _learnInterfaceMacs(client);
+  }
+
+  /// Saves the MACs of the TV's Wi-Fi and Ethernet interfaces, so Wake-on-LAN
+  /// reaches the interface the TV actually uses. Best effort.
+  Future<void> _learnInterfaceMacs(AdbClient client) async {
+    final List<String> macs;
+    try {
+      macs = parseInterfaceMacs(await client.shell(interfaceListCommand));
+    } on Object {
+      return;
+    }
+    final tv = _tv;
+    if (_disposed || tv == null || macs.isEmpty) return;
+    if (tv.interfaceMacs.length == macs.length && tv.interfaceMacs.every(macs.contains)) return;
+    final updated = tv.copyWith(interfaceMacs: macs);
+    _tv = updated;
+    await _store.saveTv(updated);
   }
 
   /// Stops using ADB for this TV.
@@ -373,6 +468,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       pairingPort: tv.pairingPort,
       serverFingerprint: tv.serverFingerprint,
       mac: tv.mac,
+      interfaceMacs: tv.interfaceMacs,
     );
     await _store.saveTv(updated);
     _tv = updated;
@@ -391,6 +487,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
     }).then((client) {
       _adb = client;
+      if (_tv?.interfaceMacs.isEmpty ?? false) unawaited(_learnInterfaceMacs(client));
       return client;
     }).whenComplete(() => _adbConnecting = null);
     _adbConnecting = future;

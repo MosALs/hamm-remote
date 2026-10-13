@@ -16,6 +16,7 @@ class SavedTv {
     this.serverFingerprint,
     this.adbEnabled = false,
     this.mac,
+    this.interfaceMacs = const [],
   });
 
   final String name;
@@ -33,6 +34,15 @@ class SavedTv {
   /// The TV's MAC address, used to wake it with Wake-on-LAN.
   final String? mac;
 
+  /// MAC addresses of the TV's network interfaces (Wi-Fi, Ethernet), read
+  /// over ADB. The certificate's [mac] is not always the interface in use.
+  final List<String> interfaceMacs;
+
+  /// Every address worth sending a wake-up packet to, without duplicates.
+  List<String> get wakeMacs => {
+        for (final m in [?mac, ...interfaceMacs]) m.toUpperCase(),
+      }.toList();
+
   bool get isPaired => serverFingerprint != null;
 
   SavedTv copyWith({
@@ -42,6 +52,7 @@ class SavedTv {
     String? serverFingerprint,
     bool? adbEnabled,
     String? mac,
+    List<String>? interfaceMacs,
   }) =>
       SavedTv(
         name: name ?? this.name,
@@ -51,6 +62,7 @@ class SavedTv {
         serverFingerprint: serverFingerprint ?? this.serverFingerprint,
         adbEnabled: adbEnabled ?? this.adbEnabled,
         mac: mac ?? this.mac,
+        interfaceMacs: interfaceMacs ?? this.interfaceMacs,
       );
 
   Map<String, Object?> toJson() => {
@@ -61,6 +73,7 @@ class SavedTv {
         'serverFingerprint': serverFingerprint,
         'adb': adbEnabled,
         'mac': mac,
+        'ifMacs': interfaceMacs,
       };
 
   static SavedTv? fromJson(Object? json) {
@@ -79,6 +92,11 @@ class SavedTv {
       serverFingerprint: fingerprint is String ? fingerprint : null,
       adbEnabled: json['adb'] == true,
       mac: json['mac'] is String ? json['mac'] as String : null,
+      interfaceMacs: [
+        if (json['ifMacs'] case final List<dynamic> list)
+          for (final m in list)
+            if (m is String) m,
+      ],
     );
   }
 }
