@@ -1,3 +1,6 @@
+@Timeout(Duration(minutes: 2))
+library;
+
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
@@ -140,5 +143,5 @@ void main() {
         throwsA(isA<TvUnreachable>()),
       );
     });
-  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+  }, skip: unavailable);
 }

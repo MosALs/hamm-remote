@@ -37,12 +37,14 @@ class _HaamRemoteAppState extends State<HaamRemoteApp> {
   /// Loads the saved data and, on first launch, creates the phone's key.
   static Future<RemoteController> _start() async {
     final store = await AppStore.open();
-    var identity = store.loadIdentity();
-    if (identity == null) {
-      identity = await Isolate.run(ClientIdentity.generate);
-      await store.saveIdentity(identity);
-    }
+    final identity = store.loadIdentity() ?? await _createIdentity(store);
     return RemoteController(store: store, identity: identity);
+  }
+
+  static Future<ClientIdentity> _createIdentity(AppStore store) async {
+    final identity = await Isolate.run<ClientIdentity>(ClientIdentity.generate);
+    await store.saveIdentity(identity);
+    return identity;
   }
 
   @override

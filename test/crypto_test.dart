@@ -1,3 +1,6 @@
+@Timeout(Duration(minutes: 3))
+library;
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -132,7 +135,7 @@ void main() {
       final check = await Process.run('openssl', ['rsa', '-check', '-noout', '-in', '${dir.path}/key.pem']);
       expect(check.exitCode, 0, reason: '${check.stdout}${check.stderr}');
     });
-  }, timeout: const Timeout(Duration(minutes: 3)));
+  });
 
   test('hexToBytes pads odd input', () {
     expect(hexToBytes('abc'), Uint8List.fromList([0x0A, 0xBC]));
