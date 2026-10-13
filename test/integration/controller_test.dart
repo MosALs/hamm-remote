@@ -1,0 +1,80 @@
+import 'dart:async';
+import 'dart:io';
+
+import 'package:flutter_test/flutter_test.dart';
+import 'package:haam_remote/src/app/remote_controller.dart';
+import 'package:haam_remote/src/app/store.dart';
+import 'package:haam_remote/src/crypto/identity.dart';
+import 'package:haam_remote/src/protocol/keycodes.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../support/mock_tv.dart';
+import '../support/test_identity.dart';
+
+Future<void> waitUntil(bool Function() condition, {Duration timeout = const Duration(seconds: 10)}) async {
+  final deadline = DateTime.now().add(timeout);
+  while (!condition()) {
+    if (DateTime.now().isAfter(deadline)) throw TimeoutException('Condition not met in $timeout');
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+  }
+}
+
+/// The app's controller driving the simulated TV, as a user would:
+/// choose the TV, pair, press buttons, lose the connection.
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+  final unavailable = MockTv.unavailableReason();
+  if (unavailable != null && Platform.environment['REQUIRE_MOCK_TV'] == '1') {
+    throw StateError('Mock TV required in CI but unavailable: $unavailable');
+  }
+
+  late ClientIdentity identity;
+  setUpAll(() => identity = loadTestIdentity());
+
+  test('choose, pair, control, reconnect', () async {
+    SharedPreferences.setMockInitialValues({});
+    var tv = await MockTv.start();
+    final store = await AppStore.open();
+    final controller = RemoteController(store: store, identity: identity);
+    addTearDown(controller.dispose);
+
+    await controller.selectTv(SavedTv(
+      name: 'Living room',
+      host: '127.0.0.1',
+      remotePort: tv.remotePort,
+      pairingPort: tv.pairPort,
+    ));
+    expect(controller.state, LinkState.needsPairing);
+
+    // A key pressed before pairing is dropped, not queued forever.
+    controller.press(KeyCode.home);
+
+    final pairing = await controller.startPairing();
+    final code = (await tv.waitFor('pairing_code'))['code'] as String;
+    await controller.finishPairing(pairing, code);
+    expect(controller.state, LinkState.connected);
+    expect(controller.tv!.isPaired, isTrue);
+    expect(store.currentTv!.serverFingerprint, pairing.serverFingerprint);
+
+    controller.press(KeyCode.green);
+    controller.press(KeyCode.dpadDown);
+    expect((await tv.waitFor('key'))['code'], KeyCode.green);
+    expect((await tv.waitFor('key'))['code'], KeyCode.dpadDown);
+    expect(tv.events.where((e) => e['event'] == 'key' && e['code'] == KeyCode.home), isEmpty);
+
+    controller.launchApp(TvApp.youtube.launchLink);
+    expect((await tv.waitFor('app_link'))['link'], TvApp.youtube.launchLink);
+    await waitUntil(() => controller.volume != null);
+
+    // The TV disappears: the controller notices and keeps retrying.
+    await tv.close();
+    await waitUntil(() => controller.state == LinkState.offline);
+
+    // A different TV now answers on a new port with a new identity:
+    // the saved pin forces pairing again instead of silently trusting it.
+    tv = await MockTv.start();
+    addTearDown(tv.close);
+    await controller.selectTv(controller.tv!.copyWith(remotePort: tv.remotePort));
+    await waitUntil(() => controller.state == LinkState.needsPairing);
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+}

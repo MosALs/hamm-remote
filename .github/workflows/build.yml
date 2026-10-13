@@ -1,0 +1,173 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  FLUTTER_VERSION: '3.47.7'
+  # Fills in the generated Android/iOS project files that are not committed.
+  # Existing files (manifest, Info.plist, icons) are kept.
+  FLUTTER_CREATE: flutter create --org com.haam --project-name haam_remote --platforms android,ios .
+
+jobs:
+  test:
+    name: Analyze and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install mock TV dependencies
+        run: pip install pyopenssl cryptography androidtvremote2
+
+      - name: Validate the mock TV against the reference client
+        run: python tool/mock_tv/validate_mock.py
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Generate platform projects
+        run: ${{ env.FLUTTER_CREATE }}
+
+      - run: flutter pub get
+
+      - name: Check formatting
+        run: |
+          if ! dart format --output=none --set-exit-if-changed lib test; then
+            echo "::warning::Some files are not dart-formatted. Run 'dart format lib test'."
+          fi
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test (unit, widget, and end-to-end against the mock TV)
+        env:
+          REQUIRE_MOCK_TV: '1'
+        run: flutter test
+
+      - name: Render screenshots of the main screens
+        run: flutter test --tags screenshots --run-skipped --update-goldens
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: test/screenshots/goldens/
+
+  android:
+    name: Android APK
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Generate platform projects
+        run: ${{ env.FLUTTER_CREATE }}
+
+      - name: Build release APK
+        run: flutter build apk --release --build-number ${{ github.run_number }}
+
+      - name: Sign with the app's own key
+        # The same key on every build, so new versions install over old ones.
+        run: |
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$APKSIGNER" sign \
+            --ks android/signing/sideload.p12 --ks-type PKCS12 \
+            --ks-pass pass:haamremote --ks-key-alias haam \
+            --out haam-remote.apk build/app/outputs/flutter-apk/app-release.apk
+          "$APKSIGNER" verify --print-certs haam-remote.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: haam-remote-apk
+          path: haam-remote.apk
+
+  ios:
+    name: iOS (unsigned IPA)
+    needs: test
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Generate platform projects
+        run: ${{ env.FLUTTER_CREATE }}
+
+      - name: Build
+        run: flutter build ios --release --no-codesign --build-number ${{ github.run_number }}
+
+      - name: Package unsigned IPA (sign it with Sideloadly or AltStore)
+        run: |
+          mkdir -p Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/
+          zip -qry haam-remote-unsigned.ipa Payload
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: haam-remote-ipa
+          path: haam-remote-unsigned.ipa
+
+  release:
+    name: Publish "latest" release
+    needs: [android, ios]
+    if: always() && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && needs.android.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: haam-remote-apk
+
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: haam-remote-ipa
+
+      - name: Replace the "latest" release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release delete latest --yes --cleanup-tag || true
+          files="haam-remote.apk"
+          [ -f haam-remote-unsigned.ipa ] && files="$files haam-remote-unsigned.ipa"
+          gh release create latest $files \
+            --target "$GITHUB_SHA" \
+            --title "HAAM Remote (build ${{ github.run_number }})" \
+            --notes "Android: download haam-remote.apk on your phone and open it to install. iPhone: haam-remote-unsigned.ipa, install with Sideloadly or AltStore."

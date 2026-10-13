@@ -1,0 +1,24 @@
+name: haam_remote
+description: Wi-Fi remote control for HAAM / TCL Android TVs (Android TV Remote protocol v2).
+publish_to: 'none'
+
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.8.0 <4.0.0'
+  flutter: '>=3.32.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  bonsoir: ^7.1.5
+  pointycastle: ^4.0.0
+  shared_preferences: ^2.5.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
