@@ -86,7 +86,7 @@ void main() {
       expect(changed.volume.max, 100);
 
       session.launchApp(TvApp.shahid.launchLink);
-      expect((await tv.waitFor('app_link'))['link'], 'market://launch?id=net.mbc.shahidTV');
+      expect((await tv.waitFor('app_link'))['link'], 'https://shahid.mbc.net');
 
       session.sendText('الجزيرة');
       expect((await tv.waitFor('text'))['value'], 'الجزيرة');

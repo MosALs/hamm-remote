@@ -51,18 +51,17 @@ abstract final class KeyCode {
   }
 }
 
-/// Apps on the TV, launched by package name through the Play Store's
-/// launch link (works for any installed app).
+/// Apps on the TV, opened with deep links. Launching by package name
+/// (`market://launch?id=...`) no longer works for most apps since a Play
+/// Store change, while the apps' own links still do.
 enum TvApp {
-  netflix('Netflix', 'com.netflix.ninja'),
-  youtube('YouTube', 'com.google.android.youtube.tv'),
-  primeVideo('Prime Video', 'com.amazon.amazonvideo.livingroom'),
-  shahid('Shahid', 'net.mbc.shahidTV');
+  netflix('Netflix', 'netflix://'),
+  youtube('YouTube', 'https://www.youtube.com'),
+  primeVideo('Prime Video', 'https://app.primevideo.com'),
+  shahid('Shahid', 'https://shahid.mbc.net');
 
-  const TvApp(this.label, this.packageName);
+  const TvApp(this.label, this.launchLink);
 
   final String label;
-  final String packageName;
-
-  String get launchLink => 'market://launch?id=$packageName';
+  final String launchLink;
 }
