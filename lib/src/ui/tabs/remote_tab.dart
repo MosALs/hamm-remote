@@ -24,7 +24,9 @@ class RemoteTab extends StatelessWidget {
     Widget quick(String caption, IconData icon, VoidCallback onPress) => Expanded(
           child: RemoteKey(label: caption, icon: icon, caption: caption.toUpperCase(), height: 60, onPress: onPress),
         );
+    // Centred: the remote reads as one object, like the physical one.
     return FitBox(
+      alignment: Alignment.center,
       child: Column(
         children: [
           Row(

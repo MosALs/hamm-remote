@@ -5,18 +5,21 @@ import 'package:flutter/material.dart';
 /// proportions on every phone without scrolling, so keys can react on
 /// touch-down.
 class FitBox extends StatelessWidget {
-  const FitBox({super.key, required this.child, this.width = 354});
+  const FitBox({super.key, required this.child, this.width = 354, this.alignment = Alignment.topCenter});
 
   final Widget child;
   final double width;
 
+  /// Where the content sits when the space is taller than it.
+  final Alignment alignment;
+
   @override
   Widget build(BuildContext context) {
     return Align(
-      alignment: Alignment.topCenter,
+      alignment: alignment,
       child: FittedBox(
         fit: BoxFit.scaleDown,
-        alignment: Alignment.topCenter,
+        alignment: alignment,
         child: SizedBox(width: width, child: child),
       ),
     );

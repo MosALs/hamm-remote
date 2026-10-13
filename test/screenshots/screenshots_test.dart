@@ -63,6 +63,17 @@ void main() {
     await _loadFonts();
   });
 
+  // flutter_test draws shadows without blur by default; draw them as a phone
+  // does. Reset inside the test body, where the binding checks it.
+  Future<void> withShadows(Future<void> Function() body) async {
+    debugDisableShadows = false;
+    try {
+      await body();
+    } finally {
+      debugDisableShadows = true;
+    }
+  }
+
   Future<RemoteController> controller({SavedTv? current}) async {
     SharedPreferences.setMockInitialValues({});
     final store = await AppStore.open();
@@ -87,6 +98,7 @@ void main() {
       theme: buildTheme(),
       home: home,
     ));
+    await tester.pump();
     await tester.pump(const Duration(milliseconds: 300));
   }
 
@@ -98,7 +110,7 @@ void main() {
     await snap(name);
   }
 
-  testWidgets('remote', (tester) async {
+  testWidgets('remote', (tester) => withShadows(() async {
     final c = await tester.runAsync(() => controller(
           current: const SavedTv(name: 'Living room', host: '192.168.1.20', serverFingerprint: 'x'),
         ));
@@ -106,19 +118,20 @@ void main() {
     await snap('remote');
     for (final tab in ['Keypad', 'Apps', 'Cast']) {
       await tester.tap(find.text(tab));
-      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      await tester.pump(const Duration(milliseconds: 300)); // let the tab highlight settle
       await snap('remote_${tab.toLowerCase()}');
     }
     await tester.pumpWidget(const SizedBox());
     c.dispose();
-  });
+  }));
 
-  testWidgets('connect', (tester) async {
+  testWidgets('connect', (tester) => withShadows(() async {
     final c = await tester.runAsync(() => controller());
     final d = _Discovery();
     await shoot(tester, ConnectScreen(controller: c!, discovery: d), 'connect');
     await tester.pumpWidget(const SizedBox());
     c.dispose();
     d.dispose();
-  });
+  }));
 }
