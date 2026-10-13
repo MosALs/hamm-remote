@@ -178,8 +178,8 @@ class _AppRow extends StatelessWidget {
       semanticLabel: 'Open ${app.label} on the phone',
       builder: (context, pressed) => AnimatedContainer(
         duration: const Duration(milliseconds: 80),
-        height: 60,
-        padding: const EdgeInsets.symmetric(horizontal: 12),
+        constraints: const BoxConstraints(minHeight: 60),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 9),
         decoration: keyDecoration(pressed: pressed, radius: 16),
         child: Row(
           children: [
@@ -195,7 +195,12 @@ class _AppRow extends StatelessWidget {
                 mainAxisAlignment: MainAxisAlignment.center,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(app.label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Palette.text)),
+                  Text(
+                    app.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: Palette.text),
+                  ),
                   const SizedBox(height: 2),
                   Text(
                     app.hint,

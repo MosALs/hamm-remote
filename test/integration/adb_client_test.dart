@@ -2,6 +2,7 @@
 library;
 
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/adb/adb_client.dart';
@@ -53,6 +54,25 @@ void main() {
       addTearDown(again.close);
       expect(askedAgain, isFalse);
       expect((await adb.waitFor('connected'))['known_key'], isTrue);
+    });
+
+    test('a TV that hangs up mid-handshake is reported, not crashed', () async {
+      // The TV sends its token and drops the connection, so the phone's
+      // signature is written into a reset socket.
+      final server = await ServerSocket.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(server.close);
+      server.listen((socket) {
+        socket.listen((_) {
+          socket.add(AdbMessage(AdbMessage.auth, AdbMessage.authToken, 0, Uint8List(20)).encode());
+          socket.destroy();
+        });
+      });
+      await expectLater(
+        AdbClient.connect(host: '127.0.0.1', port: server.port, key: key),
+        throwsA(isA<TvException>()),
+      );
+      // Any late write error would surface here and fail the test.
+      await Future<void>.delayed(const Duration(milliseconds: 300));
     });
 
     test('an unanswered prompt is reported as not authorized', () async {

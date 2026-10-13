@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/app/discovery.dart';
 import 'package:haam_remote/src/app/phone_apps.dart';
@@ -39,6 +40,12 @@ Future<RemoteSession> _unreachable(SavedTv tv, ClientIdentity identity) =>
 
 Future<PairingSession> _pairingUnreachable(SavedTv tv, ClientIdentity identity) =>
     Future.error(const TvUnreachable('test'));
+
+/// Names the widgets behind any overflowing Row/Column, for failure messages.
+String _overflows(WidgetTester tester) => [
+      for (final ro in tester.allRenderObjects)
+        if (ro is RenderFlex && ro.toStringShort().contains('OVERFLOWING')) '${ro.toStringShort()} <- ${ro.debugCreator}',
+    ].join('\n');
 
 Finder _semantics(String label) =>
     find.byWidgetPredicate((w) => w is Semantics && w.properties.label == label);
@@ -107,7 +114,7 @@ void main() {
           await tester.tap(find.text(tab));
           await tester.pump(const Duration(milliseconds: 200));
           expect(find.text(marker), findsOneWidget, reason: '$tab tab');
-          expect(tester.takeException(), isNull, reason: '$tab tab');
+          expect(tester.takeException(), isNull, reason: '$tab tab\n${_overflows(tester)}');
         }
 
         await tester.pumpWidget(const SizedBox());

@@ -401,6 +401,8 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _adbShell(String command) async {
     for (var attempt = 0; attempt < 2; attempt++) {
+      // Closed on purpose (app paused, TV switched, disposed): don't reopen.
+      if (_disposed || _tv?.adbEnabled != true) return;
       try {
         final client = await _adbClient();
         await client.shell(command);
@@ -410,6 +412,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
         }
         return;
       } on TvConnectionLost {
+        if (_disposed) return;
         _closeAdb(); // the TV dropped an idle connection; reconnect once
       } on TvException catch (e) {
         _setAdbError(e.message);

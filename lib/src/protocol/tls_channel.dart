@@ -18,6 +18,9 @@ class TlsChannel {
       onDone: () => _finish(null),
       cancelOnError: true,
     );
+    // A write to a socket the TV reset fails through `done`; the same error
+    // already ends the stream above, so it must not surface a second time.
+    unawaited(_socket.done.then<void>((_) {}, onError: (Object _) {}));
   }
 
   final SecureSocket _socket;
