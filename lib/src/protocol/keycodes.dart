@@ -31,6 +31,13 @@ abstract final class KeyCode {
   static const int captions = 175;
   static const int settings = 176;
   static const int tvInput = 178;
+  static const int tvTerrestrialDigital = 236;
+  static const int tvSatellite = 237;
+  static const int tvAntennaCable = 242;
+  static const int tvInputHdmi1 = 243;
+  static const int tvInputHdmi2 = 244;
+  static const int tvInputHdmi3 = 245;
+  static const int tvInputComposite1 = 247;
   static const int red = 183;
   static const int green = 184;
   static const int yellow = 185;

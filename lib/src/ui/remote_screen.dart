@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import '../app/remote_controller.dart';
 import '../protocol/keycodes.dart';
+import 'input_sheet.dart';
 import 'keypad_sheet.dart';
 import 'pairing_screen.dart';
 import 'text_input_sheet.dart';
@@ -271,7 +272,11 @@ class _RemoteBody extends StatelessWidget {
               foreground: Palette.power,
               onPress: () => _key(KeyCode.power),
             ),
-            RemoteKey(label: 'Input', icon: Icons.input_rounded, onPress: () => _key(KeyCode.tvInput)),
+            RemoteKey(
+              label: 'Input',
+              icon: Icons.input_rounded,
+              onPress: () => unawaited(showInputSheet(context, controller)),
+            ),
             RemoteKey(label: 'Settings', icon: Icons.settings_rounded, onPress: () => _key(KeyCode.settings)),
             RemoteKey(label: 'Mute', icon: Icons.volume_off_rounded, onPress: () => _key(KeyCode.volumeMute)),
           ],
