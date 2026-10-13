@@ -1,0 +1,41 @@
+# Codemagic build (alternative to GitHub Actions). Connect this repo at
+# codemagic.io, pick the "android" workflow, and press Start new build.
+# The signed APK appears under the build's Artifacts.
+workflows:
+  android:
+    name: Android APK
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: 3.47.7
+      java: 17
+    triggering:
+      events:
+        - push
+      branch_patterns:
+        - pattern: main
+    scripts:
+      - name: Generate platform projects (keeps committed manifest, Info.plist, icons)
+        script: flutter create --org com.haam --project-name haam_remote --platforms android,ios .
+      - name: Get packages
+        script: flutter pub get
+      - name: Analyze
+        script: flutter analyze
+      - name: Install mock TV dependencies
+        script: |
+          python3 -m pip install --user --break-system-packages pyopenssl cryptography \
+            || python3 -m pip install --user pyopenssl cryptography
+      - name: Test (unit, widget, end-to-end against the mock TV)
+        script: REQUIRE_MOCK_TV=1 flutter test
+      - name: Build release APK
+        script: flutter build apk --release --build-number "$BUILD_NUMBER"
+      - name: Sign with the app's own key
+        script: |
+          APKSIGNER=$(ls -d "$ANDROID_SDK_ROOT"/build-tools/*/ | sort -V | tail -1)apksigner
+          "$APKSIGNER" sign \
+            --ks android/signing/sideload.p12 --ks-type PKCS12 \
+            --ks-pass pass:haamremote --ks-key-alias haam \
+            --out haam-remote.apk build/app/outputs/flutter-apk/app-release.apk
+          "$APKSIGNER" verify --print-certs haam-remote.apk
+    artifacts:
+      - haam-remote.apk
