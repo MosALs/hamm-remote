@@ -24,8 +24,15 @@ jobs:
     name: Analyze and test
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    permissions:
+      contents: write  # to publish logs to the ci-logs branch
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+
+      - run: mkdir -p ci-logs
 
       - uses: actions/setup-python@v5
         with:
@@ -35,7 +42,7 @@ jobs:
         run: pip install pyopenssl cryptography androidtvremote2
 
       - name: Validate the mock TV against the reference client
-        run: python tool/mock_tv/validate_mock.py
+        run: set -o pipefail; python tool/mock_tv/validate_mock.py 2>&1 | tee ci-logs/validate_mock.txt
 
       - uses: subosito/flutter-action@v2
         with:
@@ -44,31 +51,42 @@ jobs:
           cache: true
 
       - name: Generate platform projects
-        run: ${{ env.FLUTTER_CREATE }}
+        run: set -o pipefail; ${{ env.FLUTTER_CREATE }} 2>&1 | tee ci-logs/create.txt
 
-      - run: flutter pub get
+      - run: set -o pipefail; flutter pub get 2>&1 | tee ci-logs/pub_get.txt
 
       - name: Check formatting
         run: |
-          if ! dart format --output=none --set-exit-if-changed lib test; then
+          if ! dart format --output=show --set-exit-if-changed lib test > ci-logs/format.txt 2>&1; then
             echo "::warning::Some files are not dart-formatted. Run 'dart format lib test'."
           fi
 
       - name: Analyze
-        run: flutter analyze
+        run: set -o pipefail; flutter analyze 2>&1 | tee ci-logs/analyze.txt
 
       - name: Test (unit, widget, and end-to-end against the mock TV)
         env:
           REQUIRE_MOCK_TV: '1'
-        run: flutter test
+        run: set -o pipefail; flutter test --reporter expanded 2>&1 | tee ci-logs/test.txt
 
       - name: Render screenshots of the main screens
-        run: flutter test --tags screenshots --run-skipped --update-goldens
+        run: |
+          set -o pipefail
+          flutter test --tags screenshots --run-skipped --update-goldens 2>&1 | tee ci-logs/screenshots.txt
+          mkdir -p ci-logs/screenshots && cp test/screenshots/goldens/*.png ci-logs/screenshots/
 
       - uses: actions/upload-artifact@v4
         with:
           name: screenshots
           path: test/screenshots/goldens/
+
+      - name: Publish logs to the ci-logs branch
+        if: always()
+        run: |
+          cd ci-logs
+          git init -q && git checkout -q -b ci-logs
+          git add -A && git -c user.name=ci -c user.email=ci@localhost commit -qm "Logs for run $GITHUB_RUN_ID" || exit 0
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-logs
 
   android:
     name: Android APK
