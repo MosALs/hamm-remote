@@ -112,7 +112,7 @@ class _ConnectScreenState extends State<ConnectScreen> {
                 ),
                 const SizedBox(height: 12),
                 const Text(
-                  'Find it on the TV under Settings → Network & Internet → your Wi-Fi network.',
+                  'Find it on the TV under Settings > Network & Internet > your Wi-Fi network.',
                   textAlign: TextAlign.center,
                   style: TextStyle(color: Palette.muted, fontSize: 12.5, height: 1.4),
                 ),

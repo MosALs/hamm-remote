@@ -97,6 +97,19 @@ class _DpadState extends State<Dpad> {
               painter: _DpadPainter(pressed: _pressed, okRadius: _okRadius),
             ),
           ),
+          const IgnorePointer(
+            child: Center(
+              child: Text(
+                'OK',
+                style: TextStyle(
+                  color: Color(0xFFB8BECB),
+                  fontSize: 22,
+                  fontWeight: FontWeight.w500,
+                  letterSpacing: 0.5,
+                ),
+              ),
+            ),
+          ),
           // Accessible labels for screen readers.
           hidden('Up', DpadZone.up),
           hidden('Down', DpadZone.down),
@@ -177,14 +190,7 @@ class _DpadPainter extends CustomPainter {
       okRadius,
       Paint()..color = pressed == DpadZone.ok ? const Color(0xFF2B303A) : Palette.okKey,
     );
-    final tp = TextPainter(
-      text: const TextSpan(
-        text: 'OK',
-        style: TextStyle(color: Color(0xFFB8BECB), fontSize: 22, fontWeight: FontWeight.w500, letterSpacing: 0.5),
-      ),
-      textDirection: TextDirection.ltr,
-    )..layout();
-    tp.paint(canvas, c - Offset(tp.width / 2, tp.height / 2));
+    // The OK label is a Text widget layered on top, so it uses the app font.
   }
 
   @override
