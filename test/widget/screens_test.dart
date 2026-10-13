@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/app/discovery.dart';
+import 'package:haam_remote/src/app/phone_apps.dart';
 import 'package:haam_remote/src/app/remote_controller.dart';
 import 'package:haam_remote/src/app/store.dart';
 import 'package:haam_remote/src/crypto/identity.dart';
@@ -9,6 +10,7 @@ import 'package:haam_remote/src/protocol/pairing.dart';
 import 'package:haam_remote/src/protocol/remote_session.dart';
 import 'package:haam_remote/src/ui/connect_screen.dart';
 import 'package:haam_remote/src/ui/remote_screen.dart';
+import 'package:haam_remote/src/ui/tabs/cast_tab.dart';
 import 'package:haam_remote/src/ui/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -92,8 +94,21 @@ void main() {
         expect(find.text('Offline'), findsOneWidget);
         expect(find.text('Retry'), findsOneWidget);
         expect(_semantics('Yellow key'), findsOneWidget);
-        expect(find.text('NETFLIX'), findsOneWidget);
+        expect(find.text('INPUT'), findsOneWidget);
         expect(tester.takeException(), isNull);
+
+        // Every tab lays out without overflow at this size.
+        for (final (tab, marker) in [
+          ('Keypad', 'SATELLITE MENU'),
+          ('Apps', 'NETFLIX'),
+          ('Cast', 'Cast your phone screen'),
+          ('Remote', 'INPUT'),
+        ]) {
+          await tester.tap(find.text(tab));
+          await tester.pump(const Duration(milliseconds: 200));
+          expect(find.text(marker), findsOneWidget, reason: '$tab tab');
+          expect(tester.takeException(), isNull, reason: '$tab tab');
+        }
 
         await tester.pumpWidget(const SizedBox());
         controller.dispose();
@@ -125,6 +140,58 @@ void main() {
       discovery.dispose();
     });
   }
+
+  testWidgets('cast tab opens the phone cast picker and apps', (tester) async {
+    final controller = await tester.runAsync(() => makeController(
+          current: const SavedTv(name: 'Salon TV', host: '192.168.1.20', serverFingerprint: 'pinned'),
+        ));
+    var castCalls = 0;
+    var result = CastResult.opened;
+    final opened = <CastApp>[];
+    var appOpens = true;
+    await tester.pumpWidget(app(Scaffold(
+      body: CastTab(
+        controller: controller!,
+        isIos: false,
+        screenCastOpener: () async {
+          castCalls++;
+          return result;
+        },
+        phoneAppOpener: (a) async {
+          opened.add(a);
+          return appOpens;
+        },
+      ),
+    )));
+
+    await tester.tap(find.text('Choose what to cast'));
+    await tester.pump();
+    expect(castCalls, 1);
+    expect(find.text('Pick "Salon TV" in the list to show your screen.'), findsOneWidget);
+
+    result = CastResult.unsupported;
+    await tester.tap(find.text('Choose what to cast'));
+    await tester.pump();
+    expect(find.text('Swipe down from the top of your phone and tap Cast or Smart View.'), findsOneWidget);
+
+    await tester.tap(find.text('YouTube'));
+    await tester.pump();
+    expect(opened, [CastApp.youtube]);
+
+    appOpens = false;
+    await tester.tap(find.text('Shahid'));
+    await tester.pump();
+    expect(opened, [CastApp.youtube, CastApp.shahid]);
+    expect(find.text('Open Shahid on your phone and tap the Cast icon.'), findsOneWidget);
+
+    await tester.pumpWidget(app(Scaffold(body: CastTab(controller: controller, isIos: true))));
+    await tester.tap(find.text('Choose what to cast'));
+    await tester.pump();
+    expect(find.textContaining("iPhone can't mirror"), findsOneWidget);
+
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
 
   testWidgets('a never-paired TV opens pairing by itself', (tester) async {
     final controller = await tester.runAsync(() => makeController(

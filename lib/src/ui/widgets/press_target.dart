@@ -3,6 +3,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../theme.dart';
+
 /// Detects presses with no tap delay and, when [repeat] is set, repeats
 /// the action while the finger stays down (for scrolling through lists).
 ///
@@ -89,7 +91,8 @@ class _PressTargetState extends State<PressTarget> {
   }
 }
 
-/// A rounded remote key.
+/// A remote key: a raised rounded surface with an icon or text and an
+/// optional small caption. It fills the width it is given.
 class RemoteKey extends StatelessWidget {
   const RemoteKey({
     super.key,
@@ -97,51 +100,66 @@ class RemoteKey extends StatelessWidget {
     required this.label,
     this.icon,
     this.text,
-    this.size = const Size(64, 64),
-    this.color,
+    this.caption,
+    this.height = 48,
     this.foreground,
+    this.tint,
     this.repeat = false,
-    this.shape = BoxShape.circle,
+    this.radius = 15,
+    this.textSize = 16,
   }) : assert(icon != null || text != null);
 
   final VoidCallback onPress;
   final String label;
   final IconData? icon;
   final String? text;
-  final Size size;
-  final Color? color;
+  final String? caption;
+  final double height;
   final Color? foreground;
+  final Color? tint;
   final bool repeat;
-  final BoxShape shape;
+  final double radius;
+  final double textSize;
 
   @override
   Widget build(BuildContext context) {
-    final base = color ?? const Color(0xFF242832);
-    final fg = foreground ?? const Color(0xFFE9ECF2);
+    final fg = foreground ?? Palette.text;
     return PressTarget(
       onPress: onPress,
       repeat: repeat,
       semanticLabel: label,
       builder: (context, pressed) => AnimatedContainer(
-        duration: const Duration(milliseconds: 90),
-        width: size.width,
-        height: size.height,
-        transform: Matrix4.diagonal3Values(pressed ? 0.94 : 1, pressed ? 0.94 : 1, 1),
+        duration: const Duration(milliseconds: 80),
+        height: height,
+        transform: Matrix4.diagonal3Values(pressed ? 0.96 : 1, pressed ? 0.96 : 1, 1),
         transformAlignment: Alignment.center,
-        decoration: BoxDecoration(
-          shape: shape,
-          borderRadius: shape == BoxShape.rectangle ? BorderRadius.circular(size.height / 2) : null,
-          color: pressed ? Color.lerp(base, Colors.white, 0.12) : base,
-          border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
-        ),
-        alignment: Alignment.center,
-        child: icon != null
-            ? Icon(icon, color: fg, size: size.shortestSide * 0.42)
-            : Text(
+        decoration: keyDecoration(pressed: pressed, radius: radius, tint: tint),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            if (icon != null)
+              Icon(icon, color: fg, size: 22)
+            else
+              Text(
                 text!,
                 maxLines: 1,
-                style: TextStyle(color: fg, fontSize: 15, fontWeight: FontWeight.w600),
+                style: TextStyle(color: fg, fontSize: textSize, fontWeight: FontWeight.w700),
               ),
+            if (caption != null) ...[
+              const SizedBox(height: 4),
+              Text(
+                caption!,
+                maxLines: 1,
+                style: const TextStyle(
+                  color: Palette.muted,
+                  fontSize: 9.5,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: 0.6,
+                ),
+              ),
+            ],
+          ],
+        ),
       ),
     );
   }

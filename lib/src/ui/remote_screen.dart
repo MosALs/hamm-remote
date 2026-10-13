@@ -5,16 +5,15 @@ import 'package:flutter/material.dart';
 import '../app/remote_controller.dart';
 import '../protocol/keycodes.dart';
 import 'adb_setup_screen.dart';
-import 'input_sheet.dart';
-import 'keypad_sheet.dart';
 import 'pairing_screen.dart';
-import 'text_input_sheet.dart';
+import 'tabs/apps_tab.dart';
+import 'tabs/cast_tab.dart';
+import 'tabs/keypad_tab.dart';
+import 'tabs/remote_tab.dart';
 import 'theme.dart';
-import 'widgets/dpad.dart';
 import 'widgets/press_target.dart';
-import 'widgets/rocker.dart';
 
-/// The remote itself.
+/// The remote: a header with the TV and power, four tabs, and a tab bar.
 class RemoteScreen extends StatefulWidget {
   const RemoteScreen({super.key, required this.controller});
 
@@ -28,8 +27,8 @@ class _RemoteScreenState extends State<RemoteScreen> {
   RemoteController get c => widget.controller;
   String? _autoPairedHost;
   bool _pairingOpen = false;
-
   bool _adbHintShown = false;
+  int _tab = 0;
 
   @override
   void initState() {
@@ -86,30 +85,59 @@ class _RemoteScreenState extends State<RemoteScreen> {
     _pairingOpen = false;
   }
 
+  Future<void> _openTvMenu() async {
+    final choice = await showModalBottomSheet<String>(
+      context: context,
+      builder: (context) => _TvMenu(controller: c),
+    );
+    switch (choice) {
+      case 'pair':
+        await _openPairing();
+      case 'adb':
+        await _openAdbSetup();
+      case 'switch':
+        await c.switchTv();
+      case 'forget':
+        final host = c.tv?.host;
+        if (host != null) await c.forgetTv(host);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final tabs = [
+      RemoteTab(controller: c),
+      KeypadTab(controller: c),
+      AppsTab(controller: c),
+      CastTab(controller: c),
+    ];
     return Scaffold(
-      body: SafeArea(
-        child: ListenableBuilder(
-          listenable: c,
-          builder: (context, _) => Column(
-            children: [
-              _Header(controller: c, onPair: _openPairing, onAdb: _openAdbSetup),
-              _StatusBanner(controller: c, onPair: _openPairing, onAdb: _openAdbSetup),
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 12),
-                  child: FittedBox(
-                    fit: BoxFit.contain,
-                    child: SizedBox(
-                      width: _RemoteBody.width,
-                      height: _RemoteBody.height,
-                      child: _RemoteBody(controller: c),
-                    ),
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: RadialGradient(
+            center: Alignment(0, -1.2),
+            radius: 1.3,
+            colors: [Palette.backgroundTop, Palette.background],
+            stops: [0, 0.55],
+          ),
+        ),
+        child: SafeArea(
+          bottom: false,
+          child: ListenableBuilder(
+            listenable: c,
+            builder: (context, _) => Column(
+              children: [
+                _Header(controller: c, onMenu: _openTvMenu),
+                _StatusBanner(controller: c, onPair: _openPairing, onAdb: _openAdbSetup),
+                Expanded(
+                  child: Padding(
+                    padding: const EdgeInsets.fromLTRB(18, 8, 18, 8),
+                    child: IndexedStack(index: _tab, sizing: StackFit.expand, children: tabs),
                   ),
                 ),
-              ),
-            ],
+                _TabBar(index: _tab, onSelect: (i) => setState(() => _tab = i)),
+              ],
+            ),
           ),
         ),
       ),
@@ -118,101 +146,236 @@ class _RemoteScreenState extends State<RemoteScreen> {
 }
 
 class _Header extends StatelessWidget {
-  const _Header({required this.controller, required this.onPair, required this.onAdb});
+  const _Header({required this.controller, required this.onMenu});
 
   final RemoteController controller;
-  final VoidCallback onPair;
-  final VoidCallback onAdb;
+  final VoidCallback onMenu;
 
   @override
   Widget build(BuildContext context) {
     final tv = controller.tv;
+    final volume = controller.volume;
     final (Color dot, String status) = switch (controller.state) {
-      LinkState.connected => (Palette.green, 'Connected'),
-      LinkState.connecting => (Palette.warning, 'Connecting…'),
+      LinkState.connected => (Palette.ok, volume == null ? 'Connected' : 'Connected · Vol ${volume.level}'),
+      LinkState.connecting => (Palette.warning, controller.message ?? 'Connecting…'),
       LinkState.offline => (Palette.red, 'Offline'),
       LinkState.needsPairing => (Palette.warning, 'Not paired'),
       LinkState.idle => (Palette.muted, ''),
     };
-    final volume = controller.volume;
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 10, 6, 6),
+      padding: const EdgeInsets.fromLTRB(18, 10, 18, 6),
       child: Row(
         children: [
           Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  tv?.name ?? 'TV',
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w700),
-                ),
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(color: dot, shape: BoxShape.circle),
-                    ),
-                    const SizedBox(width: 6),
-                    Text(status, style: const TextStyle(color: Palette.muted, fontSize: 13)),
-                    if (volume != null && controller.isConnected) ...[
-                      const SizedBox(width: 12),
-                      Icon(
-                        volume.muted ? Icons.volume_off_rounded : Icons.volume_up_rounded,
-                        size: 15,
-                        color: Palette.muted,
+            child: Material(
+              color: Palette.surface,
+              borderRadius: BorderRadius.circular(18),
+              clipBehavior: Clip.antiAlias,
+              child: InkWell(
+                onTap: onMenu,
+                child: Container(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 12, 8),
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(18),
+                    border: Border.all(color: Palette.line),
+                  ),
+                  child: Row(
+                    children: [
+                      Container(
+                        width: 36,
+                        height: 36,
+                        decoration: BoxDecoration(color: Palette.raised, borderRadius: BorderRadius.circular(11)),
+                        child: const Icon(Icons.tv_rounded, color: Palette.accent, size: 19),
                       ),
-                      const SizedBox(width: 6),
-                      SizedBox(
-                        width: 64,
-                        child: ClipRRect(
-                          borderRadius: BorderRadius.circular(2),
-                          child: LinearProgressIndicator(
-                            value: volume.muted ? 0 : volume.fraction,
-                            minHeight: 4,
-                            backgroundColor: Palette.key,
-                            color: Palette.accent,
-                          ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              tv?.name ?? 'TV',
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800),
+                            ),
+                            const SizedBox(height: 2),
+                            Row(
+                              children: [
+                                Container(
+                                  width: 7,
+                                  height: 7,
+                                  decoration: BoxDecoration(
+                                    color: dot,
+                                    shape: BoxShape.circle,
+                                    boxShadow: [BoxShadow(color: dot.withValues(alpha: 0.7), blurRadius: 6)],
+                                  ),
+                                ),
+                                const SizedBox(width: 6),
+                                Flexible(
+                                  child: Text(
+                                    status,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      color: Palette.muted,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      fontFeatures: [FontFeature.tabularFigures()],
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
                         ),
                       ),
-                      const SizedBox(width: 6),
-                      Text('${volume.level}', style: const TextStyle(color: Palette.muted, fontSize: 12)),
+                      const Icon(Icons.expand_more_rounded, color: Palette.muted, size: 22),
                     ],
-                  ],
+                  ),
                 ),
-              ],
+              ),
             ),
           ),
-          PopupMenuButton<String>(
-            icon: const Icon(Icons.more_vert_rounded),
-            tooltip: 'TV options',
-            onSelected: (value) async {
-              switch (value) {
-                case 'pair':
-                  onPair();
-                case 'adb':
-                  onAdb();
-                case 'switch':
-                  await controller.switchTv();
-                case 'forget':
-                  final host = controller.tv?.host;
-                  if (host != null) await controller.forgetTv(host);
-              }
-            },
-            itemBuilder: (_) => [
-              PopupMenuItem(
-                value: 'adb',
-                child: Text(controller.tv?.adbEnabled == true ? 'TV keys over ADB: on' : 'Fix TV keys (ADB)'),
-              ),
-              const PopupMenuItem(value: 'pair', child: Text('Pair again')),
-              const PopupMenuItem(value: 'switch', child: Text('Switch TV')),
-              const PopupMenuItem(value: 'forget', child: Text('Forget this TV')),
-            ],
+          const SizedBox(width: 10),
+          _PowerKey(controller: controller),
+        ],
+      ),
+    );
+  }
+}
+
+class _PowerKey extends StatelessWidget {
+  const _PowerKey({required this.controller});
+
+  final RemoteController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return PressTarget(
+      onPress: () => controller.press(KeyCode.power),
+      semanticLabel: 'Power',
+      builder: (context, pressed) => AnimatedContainer(
+        duration: const Duration(milliseconds: 80),
+        width: 54,
+        height: 54,
+        transform: Matrix4.diagonal3Values(pressed ? 0.94 : 1, pressed ? 0.94 : 1, 1),
+        transformAlignment: Alignment.center,
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(18),
+          gradient: const LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [Color(0xFF2A1D22), Color(0xFF1E1519)],
           ),
+          border: Border.all(color: Palette.power.withValues(alpha: 0.28)),
+          boxShadow: [
+            BoxShadow(
+              color: Palette.power.withValues(alpha: pressed ? 0.2 : 0.45),
+              blurRadius: 22,
+              spreadRadius: -8,
+            ),
+          ],
+        ),
+        child: const Icon(Icons.power_settings_new_rounded, color: Palette.power, size: 26),
+      ),
+    );
+  }
+}
+
+class _TvMenu extends StatelessWidget {
+  const _TvMenu({required this.controller});
+
+  final RemoteController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final adbOn = controller.tv?.adbEnabled == true;
+    Widget item(String value, IconData icon, String title, String subtitle, {Color? color}) => ListTile(
+          leading: Icon(icon, color: color ?? Palette.accent),
+          title: Text(title, style: TextStyle(fontWeight: FontWeight.w700, color: color)),
+          subtitle: Text(subtitle, style: const TextStyle(color: Palette.muted, fontSize: 13)),
+          onTap: () => Navigator.of(context).pop(value),
+        );
+    return SafeArea(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          item(
+            'adb',
+            Icons.developer_mode_rounded,
+            adbOn ? 'TV keys over ADB: on' : 'Fix TV keys (ADB)',
+            'Input, Settings, sources and coloured keys',
+          ),
+          item('pair', Icons.link_rounded, 'Pair again', 'If the TV stopped responding'),
+          item('switch', Icons.swap_horiz_rounded, 'Switch TV', 'Pick another TV'),
+          item('forget', Icons.delete_outline_rounded, 'Forget this TV', 'Remove it from this phone', color: Palette.red),
+          const SizedBox(height: 8),
+        ],
+      ),
+    );
+  }
+}
+
+class _TabBar extends StatelessWidget {
+  const _TabBar({required this.index, required this.onSelect});
+
+  final int index;
+  final ValueChanged<int> onSelect;
+
+  static const _items = [
+    (Icons.radio_button_checked_rounded, 'Remote'),
+    (Icons.dialpad_rounded, 'Keypad'),
+    (Icons.apps_rounded, 'Apps'),
+    (Icons.cast_rounded, 'Cast'),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    return Container(
+      padding: EdgeInsets.fromLTRB(12, 8, 12, 8 + bottom),
+      decoration: const BoxDecoration(
+        color: Color(0xF00B0D12),
+        border: Border(top: BorderSide(color: Palette.line)),
+      ),
+      child: Row(
+        children: [
+          for (var i = 0; i < _items.length; i++)
+            Expanded(
+              child: Semantics(
+                selected: i == index,
+                button: true,
+                label: _items[i].$2,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => onSelect(i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    padding: const EdgeInsets.symmetric(vertical: 8),
+                    decoration: BoxDecoration(
+                      color: i == index ? Palette.accent.withValues(alpha: 0.12) : Colors.transparent,
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(_items[i].$1, size: 22, color: i == index ? Palette.accent : Palette.muted),
+                        const SizedBox(height: 4),
+                        Text(
+                          _items[i].$2,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: i == index ? Palette.accent : Palette.muted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -269,229 +432,20 @@ class _StatusBanner extends StatelessWidget {
     required VoidCallback onAction,
   }) {
     return Container(
-      margin: const EdgeInsets.fromLTRB(16, 4, 16, 4),
+      margin: const EdgeInsets.fromLTRB(18, 4, 18, 2),
       padding: const EdgeInsets.fromLTRB(14, 6, 6, 6),
       decoration: BoxDecoration(
-        color: Palette.panel,
+        color: Palette.surface,
         borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Palette.keyBorder),
+        border: Border.all(color: Palette.warning.withValues(alpha: 0.3)),
       ),
       child: Row(
         children: [
           Icon(icon, size: 20, color: Palette.warning),
           const SizedBox(width: 10),
-          Expanded(
-            child: Text(text, style: const TextStyle(fontSize: 13.5, color: Palette.text)),
-          ),
+          Expanded(child: Text(text, style: const TextStyle(fontSize: 13.5, fontWeight: FontWeight.w600))),
           TextButton(onPressed: onAction, child: Text(action)),
         ],
-      ),
-    );
-  }
-}
-
-/// Fixed-size layout scaled to fit the screen, so nothing scrolls and every
-/// key reacts on touch-down.
-class _RemoteBody extends StatelessWidget {
-  const _RemoteBody({required this.controller});
-
-  static const double width = 360;
-  static const double height = 760;
-
-  final RemoteController controller;
-
-  void _key(int code) => controller.press(code);
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        const SizedBox(height: 6),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            RemoteKey(
-              label: 'Power',
-              icon: Icons.power_settings_new_rounded,
-              foreground: Palette.power,
-              onPress: () => _key(KeyCode.power),
-            ),
-            RemoteKey(
-              label: 'Input',
-              icon: Icons.input_rounded,
-              onPress: () => unawaited(showInputSheet(context, controller)),
-            ),
-            RemoteKey(label: 'Settings', icon: Icons.settings_rounded, onPress: () => _key(KeyCode.settings)),
-            RemoteKey(label: 'Mute', icon: Icons.volume_off_rounded, onPress: () => _key(KeyCode.volumeMute)),
-          ],
-        ),
-        const SizedBox(height: 20),
-        Dpad(
-          diameter: 224,
-          onPress: (zone) => _key(switch (zone) {
-            DpadZone.up => KeyCode.dpadUp,
-            DpadZone.down => KeyCode.dpadDown,
-            DpadZone.left => KeyCode.dpadLeft,
-            DpadZone.right => KeyCode.dpadRight,
-            DpadZone.ok => KeyCode.dpadCenter,
-          }),
-        ),
-        const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-          children: [
-            RemoteKey(label: 'Back', icon: Icons.arrow_back_rounded, onPress: () => _key(KeyCode.back)),
-            RemoteKey(
-              label: 'Home',
-              icon: Icons.home_rounded,
-              color: Palette.ring,
-              foreground: Palette.ringIcon,
-              onPress: () => _key(KeyCode.home),
-            ),
-            RemoteKey(label: 'Menu', icon: Icons.menu_rounded, onPress: () => _key(KeyCode.menu)),
-          ],
-        ),
-        const SizedBox(height: 20),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            Rocker(
-              label: 'VOL',
-              upIcon: Icons.add_rounded,
-              downIcon: Icons.remove_rounded,
-              upLabel: 'Volume up',
-              downLabel: 'Volume down',
-              onUp: () => _key(KeyCode.volumeUp),
-              onDown: () => _key(KeyCode.volumeDown),
-            ),
-            Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                RemoteKey(
-                  label: 'Live TV',
-                  icon: Icons.live_tv_rounded,
-                  size: const Size.square(48),
-                  onPress: () => _key(KeyCode.tv),
-                ),
-                const SizedBox(height: 10),
-                RemoteKey(
-                  label: 'Number pad',
-                  icon: Icons.dialpad_rounded,
-                  size: const Size.square(48),
-                  onPress: () => unawaited(showKeypadSheet(context, controller)),
-                ),
-                const SizedBox(height: 10),
-                RemoteKey(
-                  label: 'Keyboard',
-                  icon: Icons.keyboard_rounded,
-                  size: const Size.square(48),
-                  onPress: () => unawaited(showTextInputSheet(context, controller)),
-                ),
-              ],
-            ),
-            Rocker(
-              label: 'CH',
-              upIcon: Icons.keyboard_arrow_up_rounded,
-              downIcon: Icons.keyboard_arrow_down_rounded,
-              upLabel: 'Channel up',
-              downLabel: 'Channel down',
-              onUp: () => _key(KeyCode.channelUp),
-              onDown: () => _key(KeyCode.channelDown),
-            ),
-          ],
-        ),
-        const SizedBox(height: 22),
-        Row(
-          children: [
-            for (final (color, code, label) in [
-              (Palette.red, KeyCode.red, 'Red'),
-              (Palette.green, KeyCode.green, 'Green'),
-              (Palette.yellow, KeyCode.yellow, 'Yellow'),
-              (Palette.blue, KeyCode.blue, 'Blue'),
-            ])
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 5),
-                  child: _ColorKey(color: color, label: label, onPress: () => _key(code)),
-                ),
-              ),
-          ],
-        ),
-        const SizedBox(height: 16),
-        GridView.count(
-          crossAxisCount: 2,
-          shrinkWrap: true,
-          physics: const NeverScrollableScrollPhysics(),
-          padding: EdgeInsets.zero,
-          mainAxisSpacing: 10,
-          crossAxisSpacing: 10,
-          childAspectRatio: 3.9,
-          children: [
-            for (final app in TvApp.values)
-              _AppKey(app: app, onPress: () => controller.openApp(app)),
-          ],
-        ),
-      ],
-    );
-  }
-}
-
-class _ColorKey extends StatelessWidget {
-  const _ColorKey({required this.color, required this.label, required this.onPress});
-
-  final Color color;
-  final String label;
-  final VoidCallback onPress;
-
-  @override
-  Widget build(BuildContext context) {
-    return PressTarget(
-      onPress: onPress,
-      repeat: false,
-      semanticLabel: '$label key',
-      builder: (context, pressed) => AnimatedContainer(
-        duration: const Duration(milliseconds: 90),
-        height: 36,
-        decoration: BoxDecoration(
-          color: pressed ? Color.lerp(color, Colors.white, 0.25) : color,
-          borderRadius: BorderRadius.circular(18),
-          boxShadow: [
-            BoxShadow(color: color.withValues(alpha: pressed ? 0.15 : 0.35), blurRadius: 10, offset: const Offset(0, 3)),
-          ],
-        ),
-      ),
-    );
-  }
-}
-
-class _AppKey extends StatelessWidget {
-  const _AppKey({required this.app, required this.onPress});
-
-  final TvApp app;
-  final VoidCallback onPress;
-
-  @override
-  Widget build(BuildContext context) {
-    final (Color fg, FontWeight weight, double spacing) = switch (app) {
-      TvApp.netflix => (const Color(0xFFD81F26), FontWeight.w800, 0.6),
-      TvApp.youtube => (const Color(0xFF1B1E25), FontWeight.w700, 0.0),
-      TvApp.primeVideo => (const Color(0xFF1B6FB5), FontWeight.w700, 0.0),
-      TvApp.shahid => (const Color(0xFF1B1E25), FontWeight.w700, 0.0),
-    };
-    return PressTarget(
-      onPress: onPress,
-      semanticLabel: 'Open ${app.label}',
-      builder: (context, pressed) => AnimatedContainer(
-        duration: const Duration(milliseconds: 90),
-        decoration: BoxDecoration(
-          color: pressed ? Palette.ringPressed : Palette.ring,
-          borderRadius: BorderRadius.circular(12),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          app == TvApp.netflix ? app.label.toUpperCase() : app.label,
-          style: TextStyle(color: fg, fontWeight: weight, fontSize: 16, letterSpacing: spacing),
-        ),
       ),
     );
   }

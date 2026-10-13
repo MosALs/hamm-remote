@@ -39,5 +39,21 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Cast tab: the phone's cast picker, and apps that can cast. -->
+        <intent>
+            <action android:name="android.settings.CAST_SETTINGS"/>
+        </intent>
+        <intent>
+            <action android:name="android.settings.WIFI_DISPLAY_SETTINGS"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW"/>
+            <data android:scheme="market"/>
+        </intent>
+        <package android:name="com.google.android.apps.chromecast.app"/>
+        <package android:name="com.google.android.youtube"/>
+        <package android:name="com.netflix.mediaclient"/>
+        <package android:name="com.google.android.apps.photos"/>
+        <package android:name="net.mbc.shahid"/>
     </queries>
 </manifest>

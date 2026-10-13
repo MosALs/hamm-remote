@@ -37,19 +37,21 @@ class _Discovery extends TvDiscovery {
 }
 
 Future<void> _loadFonts() async {
+  Future<ByteData> bytes(File f) async => ByteData.sublistView(await f.readAsBytes());
+  final manrope = FontLoader('Manrope');
+  for (final w in [400, 500, 600, 700, 800]) {
+    manrope.addFont(bytes(File('assets/fonts/Manrope-$w.ttf')));
+  }
+  await manrope.load();
+
   final root = Platform.environment['FLUTTER_ROOT'];
   if (root == null) return;
   final dir = Directory('$root/bin/cache/artifacts/material_fonts');
   if (!dir.existsSync()) return;
-  Future<ByteData> bytes(File f) async => ByteData.sublistView(await f.readAsBytes());
-  final roboto = FontLoader('Roboto');
   final icons = FontLoader('MaterialIcons');
   for (final f in dir.listSync().whereType<File>()) {
-    final name = f.uri.pathSegments.last;
-    if (name.startsWith('Roboto-') && name.endsWith('.ttf')) roboto.addFont(bytes(f));
-    if (name.startsWith('MaterialIcons-Regular')) icons.addFont(bytes(f));
+    if (f.uri.pathSegments.last.startsWith('MaterialIcons-Regular')) icons.addFont(bytes(f));
   }
-  await roboto.load();
   await icons.load();
 }
 
@@ -76,24 +78,37 @@ void main() {
     );
   }
 
-  Future<void> shoot(WidgetTester tester, Widget home, String name) async {
+  Future<void> show(WidgetTester tester, Widget home) async {
     tester.view.physicalSize = const Size(390 * 3, 844 * 3);
     tester.view.devicePixelRatio = 3;
     addTearDown(tester.view.reset);
     await tester.pumpWidget(MaterialApp(
       debugShowCheckedModeBanner: false,
-      theme: buildTheme().copyWith(textTheme: buildTheme().textTheme.apply(fontFamily: 'Roboto')),
+      theme: buildTheme(),
       home: home,
     ));
     await tester.pump(const Duration(milliseconds: 300));
-    await expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name.png'));
+  }
+
+  Future<void> snap(String name) =>
+      expectLater(find.byType(MaterialApp), matchesGoldenFile('goldens/$name.png'));
+
+  Future<void> shoot(WidgetTester tester, Widget home, String name) async {
+    await show(tester, home);
+    await snap(name);
   }
 
   testWidgets('remote', (tester) async {
     final c = await tester.runAsync(() => controller(
           current: const SavedTv(name: 'Living room', host: '192.168.1.20', serverFingerprint: 'x'),
         ));
-    await shoot(tester, RemoteScreen(controller: c!), 'remote');
+    await show(tester, RemoteScreen(controller: c!));
+    await snap('remote');
+    for (final tab in ['Keypad', 'Apps', 'Cast']) {
+      await tester.tap(find.text(tab));
+      await tester.pump(const Duration(milliseconds: 300));
+      await snap('remote_${tab.toLowerCase()}');
+    }
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   });

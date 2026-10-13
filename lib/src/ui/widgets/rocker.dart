@@ -3,81 +3,70 @@ import 'package:flutter/material.dart';
 import '../theme.dart';
 import 'press_target.dart';
 
-/// A vertical two-way key (volume or channel), repeating while held.
-class Rocker extends StatelessWidget {
-  const Rocker({
+/// A horizontal two-way key (volume or channel): minus, label, plus.
+/// Both ends repeat while held.
+class Stepper2 extends StatelessWidget {
+  const Stepper2({
     super.key,
     required this.label,
-    required this.upIcon,
     required this.downIcon,
-    required this.onUp,
+    required this.upIcon,
     required this.onDown,
-    required this.upLabel,
+    required this.onUp,
     required this.downLabel,
-    this.width = 64,
-    this.height = 164,
+    required this.upLabel,
+    this.height = 52,
   });
 
   final String label;
-  final IconData upIcon;
   final IconData downIcon;
-  final VoidCallback onUp;
+  final IconData upIcon;
   final VoidCallback onDown;
-  final String upLabel;
+  final VoidCallback onUp;
   final String downLabel;
-  final double width;
+  final String upLabel;
   final double height;
 
   @override
   Widget build(BuildContext context) {
-    final radius = Radius.circular(width / 2);
-    Widget half(IconData icon, VoidCallback onPress, String semantic, bool top) => Expanded(
+    Widget end(IconData icon, VoidCallback onPress, String semantic) => SizedBox(
+          width: 50,
           child: PressTarget(
             onPress: onPress,
             repeat: true,
             semanticLabel: semantic,
             builder: (context, pressed) => AnimatedContainer(
-              duration: const Duration(milliseconds: 90),
-              decoration: BoxDecoration(
-                color: pressed ? Palette.keyPressed : Colors.transparent,
-                borderRadius: top
-                    ? BorderRadius.vertical(top: radius)
-                    : BorderRadius.vertical(bottom: radius),
-              ),
-              alignment: top ? const Alignment(0, -0.35) : const Alignment(0, 0.35),
-              child: Icon(icon, color: Palette.text, size: 26),
+              duration: const Duration(milliseconds: 80),
+              color: pressed ? Palette.raisedHi : Colors.transparent,
+              alignment: Alignment.center,
+              child: Icon(icon, color: Palette.text, size: 22),
             ),
           ),
         );
-
     return Container(
-      width: width,
       height: height,
+      clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
-        color: Palette.key,
-        borderRadius: BorderRadius.all(radius),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.06)),
+        color: Palette.surface,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Palette.line),
       ),
-      child: Stack(
-        alignment: Alignment.center,
+      child: Row(
         children: [
-          Column(
-            children: [
-              half(upIcon, onUp, upLabel, true),
-              half(downIcon, onDown, downLabel, false),
-            ],
-          ),
-          IgnorePointer(
+          end(downIcon, onDown, downLabel),
+          Expanded(
             child: Text(
               label,
+              textAlign: TextAlign.center,
               style: const TextStyle(
                 color: Palette.muted,
-                fontSize: 12,
-                fontWeight: FontWeight.w700,
-                letterSpacing: 1.2,
+                fontSize: 11,
+                fontWeight: FontWeight.w800,
+                letterSpacing: 1.6,
               ),
             ),
           ),
+          end(upIcon, onUp, upLabel),
         ],
       ),
     );
