@@ -115,6 +115,9 @@ void main() {
     await controller.enableAdb(onApprovalNeeded: () => asked = true);
     expect(asked, isTrue);
     expect(store.currentTv!.adbEnabled, isTrue);
+    // First the app reads the TV's network interfaces (for Wake-on-LAN).
+    expect((await adb.waitFor('shell'))['command'], interfaceListCommand);
+    expect(store.currentTv!.interfaceMacs, ['AA:BB:CC:DD:EE:0F', 'AA:BB:CC:DD:EE:10']);
 
     controller.press(KeyCode.tvSatellite);
     expect((await adb.waitFor('shell'))['command'], 'input keyevent ${KeyCode.tvSatellite}');
