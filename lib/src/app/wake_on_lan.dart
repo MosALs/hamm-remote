@@ -35,18 +35,31 @@ Future<void> wakeOnLan(
     targets.add(InternetAddress(host!));
   }
   final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+  Object? lastError;
+  var delivered = 0;
   try {
-    socket.broadcastEnabled = true;
+    try {
+      socket.broadcastEnabled = true;
+    } on SocketException catch (e) {
+      lastError = e;
+    }
     for (final packet in packets) {
       for (final target in targets) {
         for (final port in ports) {
-          socket.send(packet, target, port);
+          // iOS refuses broadcasts to apps without Apple's multicast
+          // entitlement; one refused target must not stop the others.
+          try {
+            if (socket.send(packet, target, port) > 0) delivered++;
+          } on SocketException catch (e) {
+            lastError = e;
+          }
         }
       }
     }
   } finally {
     socket.close();
   }
+  if (delivered == 0 && lastError != null) throw lastError;
 }
 
 /// Reads the MAC addresses of the TV's Wi-Fi and Ethernet interfaces from
