@@ -120,6 +120,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   Future<bool>? _waking;
   DateTime? _wakeUntil;
   bool _wakeFailed = false;
+  String? _lastWake;
   void Function(RemoteSession session)? _pendingAction;
   Timer? _pendingExpiry;
 
@@ -134,6 +135,9 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// The last [wake] ended without reaching the TV.
   bool get wakeFailed => _wakeFailed;
+
+  /// One line describing the last [wake] attempt, for diagnostics.
+  String? get lastWake => _lastWake;
   bool get supportsText => _session?.supportsText ?? false;
   List<SavedTv> get savedTvs => _store.loadTvs();
   ClientIdentity get identity => _identity;
@@ -365,10 +369,13 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     _wakeUntil = deadline;
     _set(LinkState.connecting, 'Waking the TV…');
 
+    final started = DateTime.now();
     var sendError = '';
+    var rounds = 0;
     Future<void> pulse() async {
       try {
         await wakeSender(macs, tv.host);
+        rounds++;
       } on Object catch (e) {
         sendError = '$e';
       }
@@ -388,6 +395,10 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     } finally {
       pulses.cancel();
     }
+    final took = DateTime.now().difference(started).inSeconds;
+    _lastWake = '${started.toIso8601String()}: sent $rounds rounds to ${macs.join(', ')} via ${tv.host}; '
+        '${isConnected ? 'TV answered after ${took}s' : 'no answer in ${took}s'}'
+        '${sendError.isEmpty ? '' : '; send error: $sendError'}';
     if (_disposed) return true;
     if (isConnected) return true;
     _wakeUntil = null;
@@ -438,6 +449,45 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     notifyListeners();
     await _learnInterfaceMacs(client);
   }
+
+  /// Collects what decides whether the TV can be woken over the network:
+  /// its model, interfaces, wake/standby settings and power state (read over
+  /// ADB while the TV is on), plus what the app knows and last tried.
+  Future<String> powerDiagnostics() async {
+    final tv = _tv;
+    final out = StringBuffer()
+      ..writeln('HAAM Remote power report')
+      ..writeln('TV: ${tv?.name} at ${tv?.host}')
+      ..writeln('Certificate MAC: ${tv?.mac ?? 'unknown'}')
+      ..writeln('Interface MACs: ${tv?.interfaceMacs.isEmpty ?? true ? 'not read yet' : tv!.interfaceMacs.join(', ')}')
+      ..writeln('Wake addresses: ${tv?.wakeMacs.join(', ') ?? '-'}')
+      ..writeln('Last wake: ${_lastWake ?? 'none yet'}')
+      ..writeln('Connected now: $isConnected, screen on: ${_session?.isOn}');
+    if (tv == null || !tv.adbEnabled) {
+      out.writeln('\nADB is off, so the TV settings could not be read.');
+      return out.toString();
+    }
+    final AdbClient client;
+    try {
+      client = await _adbClient();
+    } on Object catch (e) {
+      out.writeln('\nCould not reach the TV over ADB: $e');
+      return out.toString();
+    }
+    for (final (title, command) in diagnosticCommands) {
+      out.writeln('\n## $title');
+      try {
+        final text = (await client.shell(command)).trim();
+        out.writeln(text.isEmpty ? '(nothing)' : _clip(text, 2500));
+      } on Object catch (e) {
+        out.writeln('(failed: $e)');
+      }
+    }
+    if (tv.interfaceMacs.isEmpty) await _learnInterfaceMacs(client);
+    return out.toString();
+  }
+
+  static String _clip(String text, int max) => text.length <= max ? text : '${text.substring(0, max)}\n…';
 
   /// Saves the MACs of the TV's Wi-Fi and Ethernet interfaces, so Wake-on-LAN
   /// reaches the interface the TV actually uses. Best effort.
@@ -628,3 +678,28 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     super.dispose();
   }
 }
+
+/// Shell commands for [RemoteController.powerDiagnostics]. Each one is
+/// filtered so the report stays short enough to paste into a message.
+const List<(String, String)> diagnosticCommands = [
+  (
+    'TV',
+    'getprop ro.product.manufacturer; getprop ro.product.model; getprop ro.build.version.release; '
+        'getprop ro.build.display.id',
+  ),
+  ('Network', 'ip -o link | grep -E "wlan|eth"; ip -o -4 addr | grep -E "wlan|eth"'),
+  (
+    'Wake and standby settings',
+    'for t in global secure system; do settings list \$t | '
+        'grep -i -E "wake|wol|wowlan|standby|quick|instant|boot|suspend|cec|str_|power_on|poweron" | '
+        'sed "s/^/\$t: /"; done',
+  ),
+  (
+    'Vendor properties',
+    'getprop | grep -i -E "wol|wake|wowlan|standby|str_|suspend|quick|instant|fastboot|poweron|power_on" | head -80',
+  ),
+  (
+    'Power state',
+    'dumpsys power | grep -E "mWakefulness=|mStayOn=|mScreenOffTimeoutSetting=|mSleepTimeoutSetting=" | head -10',
+  ),
+];

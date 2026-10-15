@@ -199,4 +199,33 @@ void main() {
     expect(controller.wakeFailed, isFalse);
     expect(sent.last, ['AA:BB:CC:DD:EE:0F', 'AA:BB:CC:DD:EE:10']);
   }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('power report reads the TV over ADB', () async {
+    SharedPreferences.setMockInitialValues({});
+    final adb = await MockAdb.start();
+    addTearDown(adb.close);
+    final store = await AppStore.open();
+    final controller = RemoteController(
+      store: store,
+      identity: identity,
+      connector: (_, _) => Future.error(StateError('no TV in this test')),
+      adbConnector: (_, key, onApproval) =>
+          AdbClient.connect(host: '127.0.0.1', port: adb.port, key: key, onApprovalNeeded: onApproval),
+    );
+    addTearDown(controller.dispose);
+    await controller.selectTv(const SavedTv(name: 'TV', host: '127.0.0.1', mac: 'AA:BB:CC:DD:EE:0F'));
+
+    final withoutAdb = await controller.powerDiagnostics();
+    expect(withoutAdb, contains('Certificate MAC: AA:BB:CC:DD:EE:0F'));
+    expect(withoutAdb, contains('ADB is off'));
+
+    await controller.enableAdb();
+    final report = await controller.powerDiagnostics();
+    expect(report, contains('Interface MACs: AA:BB:CC:DD:EE:0F, AA:BB:CC:DD:EE:10'));
+    for (final (title, _) in diagnosticCommands) {
+      expect(report, contains('## $title'));
+    }
+    expect(report, contains('wlan0'));
+    expect(report, isNot(contains('(failed')));
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 1)));
 }
