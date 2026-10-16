@@ -40,3 +40,7 @@ __pycache__/
 
 # OS
 .DS_Store
+
+# TV helper build output (tv_app/build.sh)
+tv_app/build/
+assets/tv/*.apk

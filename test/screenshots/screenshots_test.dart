@@ -14,6 +14,7 @@ import 'package:haam_remote/src/protocol/errors.dart';
 import 'package:haam_remote/src/protocol/pairing.dart';
 import 'package:haam_remote/src/protocol/remote_session.dart';
 import 'package:haam_remote/src/ui/connect_screen.dart';
+import 'package:haam_remote/src/ui/keep_awake_screen.dart';
 import 'package:haam_remote/src/ui/remote_screen.dart';
 import 'package:haam_remote/src/ui/theme.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -123,6 +124,16 @@ void main() {
       await tester.pump(const Duration(milliseconds: 300)); // let the tab highlight settle
       await snap('remote_${tab.toLowerCase()}');
     }
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  }));
+
+  testWidgets('keep awake', (tester) => withShadows(() async {
+    final c = await tester.runAsync(() => controller(
+          current: const SavedTv(name: 'Living room', host: '192.168.1.20', serverFingerprint: 'x'),
+        ));
+    await show(tester, KeepAwakeScreen(controller: c!));
+    await snap('keep_awake');
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   }));

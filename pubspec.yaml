@@ -23,6 +23,9 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    # The TV helper (tv_app/), built in CI and installed on the TV over ADB.
+    - assets/tv/
   fonts:
     - family: Manrope
       fonts:

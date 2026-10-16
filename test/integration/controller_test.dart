@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/adb/adb_client.dart';
@@ -278,4 +279,40 @@ void main() {
     controller.press(KeyCode.channelUp);
     expect((await tv.waitFor('key'))['code'], KeyCode.channelUp);
   }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('installs the keep-awake helper on the TV and removes it again', () async {
+    SharedPreferences.setMockInitialValues({});
+    final adb = await MockAdb.start();
+    addTearDown(adb.close);
+    final store = await AppStore.open();
+    final controller = RemoteController(
+      store: store,
+      identity: identity,
+      connector: (_, _) => Future.error(StateError('no TV in this test')),
+      tvFinder: () async => const [],
+      adbConnector: (_, key, onApproval) =>
+          AdbClient.connect(host: '127.0.0.1', port: adb.port, key: key, onApprovalNeeded: onApproval),
+    );
+    addTearDown(controller.dispose);
+    await controller.selectTv(const SavedTv(name: 'TV', host: '127.0.0.1'));
+    await controller.enableAdb();
+    expect(await controller.keepAwakeState(), KeepAwakeState.off);
+
+    final apk = Uint8List.fromList([0x50, 0x4B, 0x03, 0x04, for (var i = 0; i < 3000; i++) i & 0xFF]);
+    await controller.enableKeepAwake(apk);
+    expect((await adb.waitFor('install'))['size'], apk.length);
+    expect((await adb.waitFor('shell'))['command'], 'dumpsys deviceidle whitelist +$keepAwakePackage');
+    expect((await adb.waitFor('shell'))['command'], 'am start-foreground-service -n $keepAwakeService');
+    expect(await controller.keepAwakeState(), KeepAwakeState.on);
+
+    await controller.disableKeepAwake();
+    expect(await controller.keepAwakeState(), KeepAwakeState.off);
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 1)));
+
+  test('reads the helper state from the TV', () {
+    expect(parseKeepAwakeState('0\n'), KeepAwakeState.off);
+    expect(parseKeepAwakeState('package:$keepAwakePackage\n0\n'), KeepAwakeState.installed);
+    expect(parseKeepAwakeState('package:$keepAwakePackage\n2\n'), KeepAwakeState.on);
+    expect(parseKeepAwakeState('package:${keepAwakePackage}x\n1\n'), KeepAwakeState.off);
+  });
 }

@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import os
 import secrets
@@ -65,12 +66,8 @@ INTERFACES = "1: lo: <LOOPBACK,UP> mtu 65536 qdisc noqueue state UNKNOWN mode DE
     "4: p2p0: <BROADCAST,MULTICAST> mtu 1500 qdisc noop state DOWN mode DEFAULT\\    link/ether ae:bb:cc:dd:ee:10 brd ff:ff:ff:ff:ff:ff\n"
 
 
-def shell_output(command: str) -> bytes:
-    """What the simulated device prints for a shell command (most print nothing)."""
-    if command.startswith("ip -o link"):
-        # Like the real shell: the `ip` listing, then the sysfs fallback lines.
-        return (INTERFACES + "wlan0 aa:bb:cc:dd:ee:10\neth0 aa:bb:cc:dd:ee:0f\n").encode()
-    return b""
+HELPER = "com.haam.keepawake"
+HELPER_SERVICE = f"{HELPER}/.KeepAwakeService"
 
 
 def decode_android_pubkey(text: bytes) -> rsa.RSAPublicKey:
@@ -129,6 +126,47 @@ class MockAdb:
         self.args = args
         self.known: list[rsa.RSAPublicKey] = []
         self.lock = threading.Lock()
+        # Simulated package manager and services, enough for the TV helper.
+        self.installed: set[str] = set()
+        self.running: set[str] = set()
+
+    def shell_output(self, command: str) -> bytes:
+        """What the simulated device prints for a shell command (most print nothing)."""
+        out = ""
+        if command.startswith("ip -o link"):
+            # Like the real shell: the `ip` listing, then the sysfs fallback lines.
+            out = INTERFACES + "wlan0 aa:bb:cc:dd:ee:10\neth0 aa:bb:cc:dd:ee:0f\n"
+        with self.lock:
+            if f"pm list packages {HELPER}" in command and HELPER in self.installed:
+                out += f"package:{HELPER}\n"
+            if "grep -c" in command and "haam:keepawake" in command:
+                out += "1\n" if HELPER in self.running else "0\n"
+            if f"am start-foreground-service -n {HELPER_SERVICE}" in command:
+                if HELPER in self.installed:
+                    self.running.add(HELPER)
+                    out += f"Starting service: Intent {{ cmp={HELPER_SERVICE} }}\n"
+                else:
+                    out += "Error: Not found; no service started.\n"
+            if f"dumpsys deviceidle whitelist +{HELPER}" in command:
+                out += f"Added: {HELPER}\n"
+            if f"pm uninstall {HELPER}" in command:
+                if HELPER in self.installed:
+                    self.installed.discard(HELPER)
+                    self.running.discard(HELPER)
+                    out += "Success\n"
+                else:
+                    out += "Failure [DELETE_FAILED_INTERNAL_ERROR]\n"
+        return out.encode()
+
+    def install(self, apk: bytes) -> bytes:
+        """`cmd package install`: accepts anything shaped like an APK (a zip)."""
+        emit("install", size=len(apk), sha256=hashlib.sha256(apk).hexdigest())
+        if not apk.startswith(b"PK\x03\x04"):
+            return b"Failure [INSTALL_PARSE_FAILED_NOT_APK: not a zip]\n"
+        with self.lock:
+            self.installed.add(HELPER)
+            self.running.discard(HELPER)  # updating an app stops it
+        return b"Success\n"
 
     def verify(self, token: bytes, signature: bytes) -> bool:
         with self.lock:
@@ -146,6 +184,8 @@ class MockAdb:
         token = secrets.token_bytes(20)
         connected = False
         local_ids = 0
+        # Streams that take input (exec:cmd package install -S N), by our id.
+        uploads: dict[int, dict] = {}
         try:
             while True:
                 msg = conn.recv()
@@ -159,7 +199,7 @@ class MockAdb:
                     if self.verify(token, data):
                         connected = True
                         emit("connected", known_key=True)
-                        conn.send(CNXN, VERSION, MAX_DATA, b"device::ro.product.name=R4;ro.product.model=R4;\0")
+                        conn.send(CNXN, VERSION, self.args.max_payload, b"device::ro.product.name=R4;ro.product.model=R4;\0")
                     else:
                         token = secrets.token_bytes(20)
                         conn.send(AUTH, AUTH_TOKEN, 0, token)
@@ -174,7 +214,7 @@ class MockAdb:
                         self.known.append(key)
                     connected = True
                     emit("connected", known_key=False)
-                    conn.send(CNXN, VERSION, MAX_DATA, b"device::ro.product.name=R4;ro.product.model=R4;\0")
+                    conn.send(CNXN, VERSION, self.args.max_payload, b"device::ro.product.name=R4;ro.product.model=R4;\0")
                 elif command == OPEN and connected:
                     local_ids += 1
                     remote_id = arg0
@@ -182,13 +222,31 @@ class MockAdb:
                     if not destination.startswith("shell:"):
                         conn.send(CLSE, 0, remote_id)
                         continue
+                    if destination.startswith("exec:cmd package install"):
+                        parts = destination.split()
+                        size = int(parts[parts.index("-S") + 1]) if "-S" in parts else -1
+                        emit("exec", command=destination[len("exec:"):])
+                        uploads[local_ids] = {"remote": remote_id, "size": size, "data": bytearray()}
+                        conn.send(OKAY, local_ids, remote_id)
+                        continue
                     command_line = destination[len("shell:"):]
                     emit("shell", command=command_line)
                     conn.send(OKAY, local_ids, remote_id)
-                    output = shell_output(command_line)
+                    output = self.shell_output(command_line)
                     if output:
                         conn.send(WRTE, local_ids, remote_id, output)
                     conn.send(CLSE, local_ids, remote_id)
+                elif command == WRTE and arg1 in uploads:
+                    upload = uploads[arg1]
+                    if len(data) > self.args.max_payload:
+                        emit("error", detail=f"WRTE of {len(data)} bytes exceeds max payload")
+                        return
+                    upload["data"] += data
+                    conn.send(OKAY, arg1, arg0)
+                    if len(upload["data"]) >= upload["size"]:
+                        del uploads[arg1]
+                        conn.send(WRTE, arg1, arg0, self.install(bytes(upload["data"])))
+                        conn.send(CLSE, arg1, arg0)
                 elif command in (OKAY, CLSE, WRTE):
                     if command == WRTE:
                         conn.send(OKAY, arg1, arg0)
@@ -222,6 +280,7 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=5555)
     parser.add_argument("--approve-delay", type=float, default=0.3)
     parser.add_argument("--reject", action="store_true")
+    parser.add_argument("--max-payload", type=int, default=MAX_DATA, help="max payload announced in CNXN")
     MockAdb(parser.parse_args()).run()
 
 

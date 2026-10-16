@@ -10,6 +10,7 @@ import 'package:haam_remote/src/protocol/errors.dart';
 import 'package:haam_remote/src/protocol/pairing.dart';
 import 'package:haam_remote/src/protocol/remote_session.dart';
 import 'package:haam_remote/src/ui/connect_screen.dart';
+import 'package:haam_remote/src/ui/keep_awake_screen.dart';
 import 'package:haam_remote/src/ui/remote_screen.dart';
 import 'package:haam_remote/src/ui/tabs/cast_tab.dart';
 import 'package:haam_remote/src/ui/theme.dart';
@@ -197,6 +198,20 @@ void main() {
     await tester.pump();
     expect(find.textContaining("iPhone can't mirror"), findsOneWidget);
 
+    await tester.pumpWidget(const SizedBox());
+    controller.dispose();
+  });
+
+  testWidgets('turn-on helper screen explains and asks for ADB first', (tester) async {
+    final controller = await tester.runAsync(() => makeController(
+          current: const SavedTv(name: 'TV', host: '192.168.1.20', serverFingerprint: 'pinned'),
+        ));
+    await tester.pumpWidget(app(KeepAwakeScreen(controller: controller!)));
+    await tester.pump();
+    expect(find.text('Turn on from the phone'), findsOneWidget);
+    expect(find.text('Set up TV keys over ADB first'), findsOneWidget);
+    expect(find.textContaining('Set up "TV keys over ADB" first'), findsOneWidget);
+    expect(tester.takeException(), isNull);
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });

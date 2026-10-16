@@ -47,6 +47,14 @@ jobs:
           python tool/mock_tv/validate_mock.py 2>&1 | tee ci-logs/validate_mock.txt
           python tool/mock_tv/validate_mock_adb.py 2>&1 | tee -a ci-logs/validate_mock.txt
 
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Build the TV helper app
+        run: set -o pipefail; tv_app/build.sh ${{ github.run_number }} 2>&1 | tee ci-logs/tv_app.txt
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: ${{ env.FLUTTER_VERSION }}
@@ -96,6 +104,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: write  # to publish the build log to the ci-logs-android branch
     steps:
       - uses: actions/checkout@v4
 
@@ -113,8 +123,22 @@ jobs:
       - name: Generate platform projects
         run: ${{ env.FLUTTER_CREATE }}
 
+      - name: Build the TV helper app (bundled into the phone app)
+        run: tv_app/build.sh ${{ github.run_number }}
+
       - name: Build release APK
-        run: flutter build apk --release --build-number ${{ github.run_number }}
+        run: |
+          set -o pipefail
+          mkdir -p ci-logs
+          flutter build apk --release --build-number ${{ github.run_number }} 2>&1 | tee ci-logs/android_build.txt
+
+      - name: Publish build log to the ci-logs-android branch
+        if: always()
+        run: |
+          mkdir -p ci-logs && cd ci-logs
+          git init -q && git checkout -q -b ci-logs-android
+          git add -A && git -c user.name=ci -c user.email=ci@localhost commit -qm "Android build log for run $GITHUB_RUN_ID" || exit 0
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" ci-logs-android
 
       - name: Sign with the app's own key
         # The same key on every build, so new versions install over old ones.

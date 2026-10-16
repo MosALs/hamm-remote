@@ -7,6 +7,7 @@ import 'dart:typed_data';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/adb/adb_client.dart';
 import 'package:haam_remote/src/adb/adb_key.dart';
+import 'package:haam_remote/src/crypto/identity.dart';
 import 'package:haam_remote/src/protocol/errors.dart';
 
 import '../support/mock_adb.dart';
@@ -73,6 +74,25 @@ void main() {
       );
       // Any late write error would surface here and fail the test.
       await Future<void>.delayed(const Duration(milliseconds: 300));
+    });
+
+    test('installs an app by streaming it in chunks the device accepts', () async {
+      final adb = await MockAdb.start(maxPayload: 4096);
+      addTearDown(adb.close);
+      final client = await AdbClient.connect(host: '127.0.0.1', port: adb.port, key: key);
+      addTearDown(client.close);
+      // 50 KB that looks like an APK (a zip), so it spans many messages.
+      final apk = Uint8List.fromList([0x50, 0x4B, 0x03, 0x04, for (var i = 0; i < 50000; i++) i * 7 & 0xFF]);
+      expect(await client.install(apk), contains('Success'));
+      expect((await adb.waitFor('exec'))['command'], 'cmd package install -r -S ${apk.length}');
+      final installed = await adb.waitFor('install');
+      expect(installed['size'], apk.length);
+      expect(installed['sha256'], sha256Hex(apk));
+      expect(adb.events.where((e) => e['event'] == 'error'), isEmpty);
+
+      // The connection stays usable, and a refused install is reported.
+      expect(await client.shell('pm list packages com.haam.keepawake'), contains('package:com.haam.keepawake'));
+      await expectLater(client.install(Uint8List.fromList([1, 2, 3])), throwsA(isA<TvProtocolError>()));
     });
 
     test('an unanswered prompt is reported as not authorized', () async {

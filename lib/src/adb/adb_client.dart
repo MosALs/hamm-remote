@@ -102,6 +102,9 @@ class AdbClient {
   int _nextLocalId = 1;
   Future<void> _queue = Future<void>.value();
 
+  /// Largest payload the device accepts in one message (from its CNXN).
+  int _maxPayload = 4096;
+
   bool get isOpen => !_closed;
 
   /// Connects and authenticates with [key]. When the TV does not know the
@@ -134,13 +137,19 @@ class AdbClient {
   Future<void> _handshake(AdbKey key, Duration approvalTimeout, void Function()? onApprovalNeeded) async {
     _send(AdbMessage(AdbMessage.cnxn, 0x01000000, 256 * 1024, Uint8List.fromList(ascii.encode('host::\x00'))));
     var msg = await _next(const Duration(seconds: 8));
-    if (msg.command == AdbMessage.cnxn) return; // device has auth disabled
+    if (msg.command == AdbMessage.cnxn) {
+      _connected(msg); // device has auth disabled
+      return;
+    }
     if (msg.command != AdbMessage.auth || msg.arg0 != AdbMessage.authToken) {
       throw const TvProtocolError('Unexpected ADB handshake reply.');
     }
     _send(AdbMessage(AdbMessage.auth, AdbMessage.authSignature, 0, key.signToken(msg.data)));
     msg = await _next(const Duration(seconds: 8));
-    if (msg.command == AdbMessage.cnxn) return;
+    if (msg.command == AdbMessage.cnxn) {
+      _connected(msg);
+      return;
+    }
     // Unknown key: offer it, which makes the TV ask the user.
     _send(AdbMessage(AdbMessage.auth, AdbMessage.authRsaPublicKey, 0, key.publicKeyMessage()));
     onApprovalNeeded?.call();
@@ -152,30 +161,66 @@ class AdbClient {
     if (msg.command != AdbMessage.cnxn) {
       throw const AdbNotAuthorized('The TV refused debugging access.');
     }
+    _connected(msg);
+  }
+
+  void _connected(AdbMessage cnxn) {
+    if (cnxn.arg1 > 0) _maxPayload = cnxn.arg1;
   }
 
   /// Runs a shell command and returns its output. Commands run one at a
   /// time, in order.
-  Future<String> shell(String command) {
-    final result = _queue.then((_) => _runShell(command));
+  Future<String> shell(String command) => _enqueue(() => _stream('shell:$command'));
+
+  /// Installs (or updates) an app from its APK bytes, streamed to the
+  /// package manager like `adb install` does. Returns the package manager's
+  /// answer; throws [TvProtocolError] when it is not "Success".
+  Future<String> install(Uint8List apk) => _enqueue(() async {
+        final answer = await _stream(
+          'exec:cmd package install -r -S ${apk.length}',
+          input: apk,
+          timeout: const Duration(seconds: 60),
+        );
+        if (!answer.contains('Success')) {
+          throw TvProtocolError('The TV did not install the app: ${answer.trim()}');
+        }
+        return answer;
+      });
+
+  Future<T> _enqueue<T>(Future<T> Function() job) {
+    final result = _queue.then((_) => job());
     _queue = result.then((_) {}, onError: (Object _) {});
     return result;
   }
 
-  Future<String> _runShell(String command) async {
+  /// Opens [service], writes [input] to it (one message at a time, each
+  /// acknowledged by the device), and collects the output until the device
+  /// closes the stream.
+  Future<String> _stream(String service, {Uint8List? input, Duration timeout = const Duration(seconds: 10)}) async {
     final localId = _nextLocalId++;
-    _send(AdbMessage(AdbMessage.open, localId, 0, Uint8List.fromList([...utf8.encode('shell:$command'), 0])));
+    _send(AdbMessage(AdbMessage.open, localId, 0, Uint8List.fromList([...utf8.encode(service), 0])));
     final output = BytesBuilder();
+    final chunk = _maxPayload.clamp(1024, 64 * 1024);
     var remoteId = 0;
+    var sent = 0;
+    var opened = false;
     while (true) {
-      final msg = await _next(const Duration(seconds: 10));
+      final msg = await _next(timeout);
       if (msg.arg1 != localId) continue; // stale message for another stream
       if (msg.command == AdbMessage.okay) {
         remoteId = msg.arg0;
+        opened = true;
+        // The device is ready for (more) input.
+        if (input != null && sent < input.length) {
+          final end = (sent + chunk).clamp(0, input.length);
+          _send(AdbMessage(AdbMessage.wrte, localId, remoteId, Uint8List.sublistView(input, sent, end)));
+          sent = end;
+        }
       } else if (msg.command == AdbMessage.wrte) {
         output.add(msg.data);
         _send(AdbMessage(AdbMessage.okay, localId, msg.arg0, Uint8List(0)));
       } else if (msg.command == AdbMessage.clse) {
+        if (!opened) throw TvProtocolError('The TV refused "${service.split(' ').first}".');
         if (remoteId != 0) _send(AdbMessage(AdbMessage.clse, localId, remoteId, Uint8List(0)));
         return utf8.decode(output.takeBytes(), allowMalformed: true);
       }

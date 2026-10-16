@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter/widgets.dart';
 
@@ -518,6 +519,43 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     await _learnInterfaceMacs(client);
   }
 
+  // --------------------------------------------------------------------
+  // Keep-awake helper on the TV
+  // --------------------------------------------------------------------
+
+  /// Reads whether the helper is installed and holding the TV awake.
+  Future<KeepAwakeState> keepAwakeState() async {
+    final client = await _adbClient();
+    return parseKeepAwakeState(await client.shell(keepAwakeStatusCommand));
+  }
+
+  /// Installs the helper ([apk]) on the TV, exempts it from idle, starts it
+  /// and checks that it holds the TV awake. Needs ADB and the TV on.
+  Future<void> enableKeepAwake(Uint8List apk) async {
+    final client = await _adbClient();
+    await client.install(apk);
+    await client.shell('dumpsys deviceidle whitelist +$keepAwakePackage');
+    final started = await client.shell('am start-foreground-service -n $keepAwakeService');
+    if (started.contains('Error')) {
+      throw TvProtocolError('The TV did not start the helper: ${started.trim()}');
+    }
+    for (var attempt = 0; attempt < 10; attempt++) {
+      if (parseKeepAwakeState(await client.shell(keepAwakeStatusCommand)) == KeepAwakeState.on) return;
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    throw const TvProtocolError('The helper is installed but is not keeping the TV awake.');
+  }
+
+  /// Removes the helper; the TV sleeps normally again.
+  Future<void> disableKeepAwake() async {
+    final client = await _adbClient();
+    final out = await client.shell('pm uninstall $keepAwakePackage');
+    if (!out.contains('Success') &&
+        parseKeepAwakeState(await client.shell(keepAwakeStatusCommand)) != KeepAwakeState.off) {
+      throw TvProtocolError('The TV did not remove the helper: ${out.trim()}');
+    }
+  }
+
   /// Collects what decides whether the TV can be woken over the network:
   /// its model, interfaces, wake/standby settings and power state (read over
   /// ADB while the TV is on), plus what the app knows and last tried.
@@ -745,6 +783,33 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     adbSuggestions.dispose();
     super.dispose();
   }
+}
+
+/// The TV helper that keeps the TV reachable while its screen is off
+/// (tv_app/ in this repository).
+const String keepAwakePackage = 'com.haam.keepawake';
+const String keepAwakeService = '$keepAwakePackage/.KeepAwakeService';
+
+/// Prints the package if installed, then how many wake locks it holds.
+const String keepAwakeStatusCommand =
+    "pm list packages $keepAwakePackage; dumpsys power | grep -c 'haam:keepawake'";
+
+enum KeepAwakeState {
+  /// Not installed: the TV sleeps normally.
+  off,
+
+  /// Installed but not holding the TV awake (not started yet, or stopped).
+  installed,
+
+  /// Installed and holding the TV awake.
+  on,
+}
+
+KeepAwakeState parseKeepAwakeState(String output) {
+  final installed = output.split('\n').any((l) => l.trim() == 'package:$keepAwakePackage');
+  if (!installed) return KeepAwakeState.off;
+  final count = output.trim().split('\n').map((l) => int.tryParse(l.trim())).whereType<int>().lastOrNull ?? 0;
+  return count > 0 ? KeepAwakeState.on : KeepAwakeState.installed;
 }
 
 /// Shell commands for [RemoteController.powerDiagnostics]. Each one is

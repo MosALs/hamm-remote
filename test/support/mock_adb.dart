@@ -22,12 +22,14 @@ class MockAdb {
   int _cursor = 0;
   late final int port;
 
-  static Future<MockAdb> start({bool reject = false}) async {
+  /// [maxPayload] is what the device announces as its largest message.
+  static Future<MockAdb> start({bool reject = false, int? maxPayload}) async {
     final process = await Process.start('python3', [
       File('tool/mock_tv/mock_adb.py').absolute.path,
       '--port',
       '0',
       if (reject) '--reject',
+      if (maxPayload != null) ...['--max-payload', '$maxPayload'],
     ]);
     final adb = MockAdb._(process);
     adb.port = (await adb.waitFor('ready'))['port'] as int;
@@ -50,6 +52,9 @@ class MockAdb {
       }
     }
   }
+
+  /// All events seen so far (for assertions on what did NOT happen).
+  List<Map<String, dynamic>> get events => List.unmodifiable(_events);
 
   Future<void> close() async {
     await _process.stdin.close();
