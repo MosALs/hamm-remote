@@ -1,0 +1,2 @@
+mock TV validated against androidtvremote2: OK
+mock ADB device validated against adb_shell: OK

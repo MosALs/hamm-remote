@@ -1,0 +1,9 @@
+
+::group::✅ Passing tests
+✅ /home/runner/work/hamm-remote/hamm-remote/test/screenshots/screenshots_test.dart: remote
+✅ /home/runner/work/hamm-remote/hamm-remote/test/screenshots/screenshots_test.dart: keep awake
+✅ /home/runner/work/hamm-remote/hamm-remote/test/screenshots/screenshots_test.dart: away
+✅ /home/runner/work/hamm-remote/hamm-remote/test/screenshots/screenshots_test.dart: connect
+::endgroup::
+
+🎉 4 tests passed.

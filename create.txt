@@ -1,0 +1,56 @@
+Recreating project ....
+  ios/Runner.xcodeproj/project.pbxproj (created)
+  ios/Runner.xcodeproj/xcshareddata/xcschemes/Runner.xcscheme (created)
+  ios/Runner.xcodeproj/project.xcworkspace/contents.xcworkspacedata (created)
+  ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist (created)
+  ios/Runner.xcodeproj/project.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings (created)
+  ios/Runner/Assets.xcassets/LaunchImage.imageset/Contents.json (created)
+  ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage@3x.png (created)
+  ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage.png (created)
+  ios/Runner/Assets.xcassets/LaunchImage.imageset/LaunchImage@2x.png (created)
+  ios/Runner/Assets.xcassets/LaunchImage.imageset/README.md (created)
+  ios/Runner/Base.lproj/Main.storyboard (created)
+  ios/Runner/Base.lproj/LaunchScreen.storyboard (created)
+  ios/Runner/AppDelegate.swift (created)
+  ios/Runner/Runner-Bridging-Header.h (created)
+  ios/Runner/SceneDelegate.swift (created)
+  ios/Runner.xcworkspace/contents.xcworkspacedata (created)
+  ios/Runner.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist (created)
+  ios/Runner.xcworkspace/xcshareddata/WorkspaceSettings.xcsettings (created)
+  ios/.gitignore (created)
+  ios/Flutter/Debug.xcconfig (created)
+  ios/Flutter/AppFrameworkInfo.plist (created)
+  ios/Flutter/Release.xcconfig (created)
+  ios/RunnerTests/RunnerTests.swift (created)
+  android/app/src/profile/AndroidManifest.xml (created)
+  android/app/src/debug/AndroidManifest.xml (created)
+  android/.gitignore (created)
+  android/settings.gradle.kts (created)
+  android/gradle.properties (created)
+  android/gradle/wrapper/gradle-wrapper.properties (created)
+  android/haam_remote_android.iml (created)
+  android/app/build.gradle.kts (created)
+  android/app/src/main/kotlin/com/haam/haam_remote/MainActivity.kt (created)
+  android/build.gradle.kts (created)
+  .idea/modules.xml (created)
+  .idea/libraries/KotlinJavaRuntime.xml (created)
+  .idea/libraries/Dart_SDK.xml (created)
+  .idea/runConfigurations/main_dart.xml (created)
+  .idea/workspace.xml (created)
+  haam_remote.iml (created)
+Resolving dependencies...
+Downloading packages...
+Got dependencies.
+Wrote 42 files.
+
+All done!
+You can find general documentation for Flutter at: https://docs.flutter.dev/
+Detailed API documentation is available at: https://api.flutter.dev/
+If you prefer video documentation, consider: https://www.youtube.com/c/flutterdev
+
+In order to run your application, type:
+
+  $ flutter run
+
+Your application code is in ./lib/main.dart.
+

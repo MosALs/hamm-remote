@@ -1,0 +1,9 @@
+build-tools: /usr/local/lib/android/sdk/build-tools/37.0.0/
+platform:    /usr/local/lib/android/sdk/platforms/android-37.2/
+package: name='com.haam.keepawake' versionCode='26' versionName='1.26' platformBuildVersionName='17' platformBuildVersionCode='37' compileSdkVersion='37' compileSdkVersionCodename='17'
+minSdkVersion:'26'
+targetSdkVersion:'30'
+uses-permission: name='android.permission.WAKE_LOCK'
+uses-permission: name='android.permission.FOREGROUND_SERVICE'
+manifest check: service exported, guarded by android.permission.DUMP
+TV helper: 12707 bytes -> assets/tv/keep-awake.apk
