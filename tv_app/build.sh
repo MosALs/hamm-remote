@@ -44,6 +44,21 @@ javac -source 1.8 -target 1.8 -Xlint:-options -Werror \
 "$BUILD_TOOLS/apksigner" verify "$OUT/keep-awake.apk"
 "$BUILD_TOOLS/aapt2" dump badging "$OUT/keep-awake.apk" | head -5
 
+# The phone starts the service from the ADB shell, which only works if it is
+# exported and guarded by a permission the shell holds (a TV refused it with
+# "Requires permission not exported" before). Fail the build otherwise.
+"$BUILD_TOOLS/aapt2" dump xmltree --file AndroidManifest.xml "$OUT/keep-awake.apk" > "$OUT/manifest.txt"
+python3 - "$OUT/manifest.txt" <<'PY'
+import re, sys
+tree = open(sys.argv[1]).read()
+service = tree[tree.index('E: service'):]
+service = service[:service.find('E: receiver')] if 'E: receiver' in service else service
+exported = re.search(r'exported\(0x01010010\)=(true|\(type 0x12\)0xffffffff|-1)', service)
+guarded = 'permission(0x01010006)="android.permission.DUMP"' in service
+assert exported and guarded, "service must be exported and guarded by DUMP:\n" + service
+print("manifest check: service exported, guarded by android.permission.DUMP")
+PY
+
 mkdir -p ../assets/tv
 cp "$OUT/keep-awake.apk" ../assets/tv/keep-awake.apk
 echo "TV helper: $(stat -c %s ../assets/tv/keep-awake.apk) bytes -> assets/tv/keep-awake.apk"

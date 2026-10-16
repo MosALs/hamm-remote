@@ -16,9 +16,13 @@
     <application
         android:label="HAAM Keep Awake"
         android:allowBackup="false">
+        <!-- Started by the phone over ADB (`am start-foreground-service`), so it
+             must be exported; DUMP is held by the ADB shell and the system
+             only, so no other app can start or bind it. -->
         <service
             android:name=".KeepAwakeService"
-            android:exported="false" />
+            android:exported="true"
+            android:permission="android.permission.DUMP" />
         <receiver
             android:name=".BootReceiver"
             android:exported="true">
