@@ -219,15 +219,15 @@ class MockAdb:
                     local_ids += 1
                     remote_id = arg0
                     destination = data.rstrip(b"\0").decode()
-                    if not destination.startswith("shell:"):
-                        conn.send(CLSE, 0, remote_id)
-                        continue
                     if destination.startswith("exec:cmd package install"):
                         parts = destination.split()
                         size = int(parts[parts.index("-S") + 1]) if "-S" in parts else -1
                         emit("exec", command=destination[len("exec:"):])
                         uploads[local_ids] = {"remote": remote_id, "size": size, "data": bytearray()}
                         conn.send(OKAY, local_ids, remote_id)
+                        continue
+                    if not destination.startswith("shell:"):
+                        conn.send(CLSE, 0, remote_id)  # like adbd for a service it does not offer
                         continue
                     command_line = destination[len("shell:"):]
                     emit("shell", command=command_line)
