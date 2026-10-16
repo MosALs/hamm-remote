@@ -68,6 +68,7 @@ void main() {
       identity: identity,
       connector: _unreachable,
       pairingStarter: _pairingUnreachable,
+      tvFinder: () async => const [],
     );
   }
 

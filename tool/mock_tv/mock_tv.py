@@ -297,6 +297,22 @@ class MockTv:
             sock.close()
         emit("asleep")
 
+    def move(self, host: str) -> None:
+        """The TV joined another network (e.g. the phone's hotspot): same TV,
+        same identity, new address."""
+        with self.lock:
+            listeners, self.listeners = self.listeners, []
+            clients, self.clients = self.clients, set()
+        for sock in [*listeners, *clients]:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            sock.close()
+        self.args.host = host
+        self._start_listening()
+        emit("moved", host=host, pair_port=self.ports[0], remote_port=self.ports[1])
+
     def wake_network(self) -> None:
         """A magic packet arrived: the network comes back, the screen stays
         off until a power or wake-up key."""
@@ -501,8 +517,11 @@ class MockTv:
             # Commands on stdin; exit when stdin closes so test harnesses
             # never leak the process.
             for line in sys.stdin:
-                if line.strip() == "sleep":
+                command = line.split()
+                if command == ["sleep"]:
                     self.sleep()
+                elif len(command) == 2 and command[0] == "move":
+                    self.move(command[1])
         except KeyboardInterrupt:
             pass
         os._exit(0)

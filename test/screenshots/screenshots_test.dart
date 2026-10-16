@@ -86,6 +86,7 @@ void main() {
       identity: identity,
       connector: (_, _) => Future<RemoteSession>.error(const TvUnreachable('x')),
       pairingStarter: (_, _) => Future<PairingSession>.error(const TvUnreachable('x')),
+      tvFinder: () async => const [],
     );
   }
 

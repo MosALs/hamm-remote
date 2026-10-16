@@ -10,6 +10,7 @@ import '../protocol/keycodes.dart';
 import '../protocol/messages.dart';
 import '../protocol/pairing.dart';
 import '../protocol/remote_session.dart';
+import 'discovery.dart';
 import 'store.dart';
 import 'wake_on_lan.dart';
 
@@ -38,6 +39,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     this.adbConnector = _defaultAdbConnector,
     this.wakeSender = _defaultWakeSender,
     this.wakeWindow = const Duration(seconds: 45),
+    this.tvFinder = _defaultTvFinder,
   })  : _store = store,
         _identity = identity,
         _tv = store.currentTv {
@@ -68,6 +70,9 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   /// How long [wake] keeps signalling and trying to reach the TV. Waking
   /// from deep sleep can take a TV half a minute.
   final Duration wakeWindow;
+
+  /// Seam for tests: lists the TVs announcing themselves on the network now.
+  final Future<List<DiscoveredTv>> Function() tvFinder;
 
   /// Keys the Android TV Remote Service drops on some TVs (TCL-made ones
   /// among them). With ADB enabled they go through ADB, which delivers them
@@ -117,6 +122,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void>? _connecting;
   Timer? _retry;
   int _failures = 0;
+  DateTime? _lastSearch;
   Future<bool>? _waking;
   DateTime? _wakeUntil;
   bool _wakeFailed = false;
@@ -152,6 +158,19 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
 
   static Future<PairingSession> _defaultPairingStarter(SavedTv tv, ClientIdentity identity) =>
       PairingSession.start(host: tv.host, port: tv.pairingPort, identity: identity);
+
+  static Future<List<DiscoveredTv>> _defaultTvFinder() async {
+    final discovery = TvDiscovery();
+    try {
+      await discovery.start();
+      if (discovery.error != null) return const [];
+      await Future<void>.delayed(const Duration(seconds: 4));
+      return discovery.tvs;
+    } finally {
+      await discovery.stop();
+      discovery.dispose();
+    }
+  }
 
   static Future<void> _defaultWakeSender(List<String> macs, String host) => wakeOnLan(macs, host: host);
 
@@ -259,6 +278,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       _clearPending();
       _set(LinkState.needsPairing, e.message);
     } on TvException catch (e) {
+      if (e is TvUnreachable && await _followTv(tv)) return;
       _failures++;
       _set(LinkState.offline, _friendly(e));
       _scheduleRetry();
@@ -267,6 +287,54 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       _set(LinkState.offline, 'Connection failed: $e');
       _scheduleRetry();
     }
+  }
+
+  /// The TV may have moved to another address, for example after joining
+  /// the phone's hotspot or getting a new address from the router. Looks for
+  /// TVs on the network and connects to the one with this TV's pinned
+  /// identity; another TV can never be picked up by mistake.
+  Future<bool> _followTv(SavedTv tv) async {
+    final fingerprint = tv.serverFingerprint;
+    final last = _lastSearch;
+    if (fingerprint == null || (last != null && DateTime.now().difference(last) < const Duration(seconds: 20))) {
+      return false;
+    }
+    _lastSearch = DateTime.now();
+    final List<DiscoveredTv> found;
+    try {
+      found = await tvFinder();
+    } on Object {
+      return false;
+    }
+    for (final candidate in found) {
+      if (_disposed || _tv?.host != tv.host) return false;
+      if (candidate.host == tv.host && candidate.port == tv.remotePort) continue;
+      final moved = tv.copyWith(host: candidate.host, remotePort: candidate.port);
+      final RemoteSession session;
+      try {
+        session = await connector(moved, _identity); // checks the pinned identity
+      } on Object {
+        continue; // another TV, or not reachable either
+      }
+      if (_disposed || _tv?.host != tv.host || !_foreground) {
+        session.close();
+        return false;
+      }
+      _closeAdb();
+      await _store.removeTv(tv.host);
+      await _store.saveTv(moved);
+      await _store.setCurrentTvHost(moved.host);
+      _tv = moved;
+      _attach(session);
+      _failures = 0;
+      _volume = session.volume;
+      _wakeFailed = false;
+      _set(LinkState.connected, null);
+      _ensureAwake(session);
+      _runPending(session);
+      return true;
+    }
+    return false;
   }
 
   String _friendly(TvException e) => switch (e) {

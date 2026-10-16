@@ -3,6 +3,7 @@ import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:haam_remote/src/adb/adb_client.dart';
+import 'package:haam_remote/src/app/discovery.dart';
 import 'package:haam_remote/src/app/remote_controller.dart';
 import 'package:haam_remote/src/app/store.dart';
 import 'package:haam_remote/src/app/wake_on_lan.dart';
@@ -38,7 +39,7 @@ void main() {
     SharedPreferences.setMockInitialValues({});
     var tv = await MockTv.start();
     final store = await AppStore.open();
-    final controller = RemoteController(store: store, identity: identity);
+    final controller = RemoteController(store: store, identity: identity, tvFinder: () async => const []);
     addTearDown(controller.dispose);
 
     await controller.selectTv(SavedTv(
@@ -228,4 +229,53 @@ void main() {
     expect(report, contains('wlan0'));
     expect(report, isNot(contains('(failed')));
   }, skip: unavailable, timeout: const Timeout(Duration(minutes: 1)));
+
+  test('follows the TV to a new address, such as the phone hotspot', () async {
+    SharedPreferences.setMockInitialValues({});
+    final tv = await MockTv.start();
+    addTearDown(tv.close);
+    // Another Android TV on the same network: it must never be picked up.
+    final other = await MockTv.start();
+    addTearDown(other.close);
+    final store = await AppStore.open();
+    var searches = 0;
+    var tvHost = '127.0.0.1';
+    final controller = RemoteController(
+      store: store,
+      identity: identity,
+      tvFinder: () async {
+        searches++;
+        return [
+          DiscoveredTv(name: 'Other TV', host: '127.0.0.1', port: other.remotePort),
+          DiscoveredTv(name: 'R4', host: tvHost, port: tv.remotePort),
+        ];
+      },
+    );
+    addTearDown(controller.dispose);
+    await controller.selectTv(SavedTv(
+      name: 'Living room',
+      host: '127.0.0.1',
+      remotePort: tv.remotePort,
+      pairingPort: tv.pairPort,
+    ));
+    final pairing = await controller.startPairing();
+    await controller.finishPairing(pairing, (await tv.waitFor('pairing_code'))['code'] as String);
+    await waitUntil(() => controller.isConnected);
+    expect(searches, 0);
+
+    // The TV joins the phone's hotspot and gets a new address.
+    tvHost = '127.0.0.2';
+    await tv.moveTo(tvHost);
+    await waitUntil(() => controller.isConnected && controller.tv!.host == '127.0.0.2',
+        timeout: const Duration(seconds: 20));
+    expect(searches, 1);
+    expect(store.currentTvHost, '127.0.0.2');
+    expect(store.loadTvs().map((t) => t.host), ['127.0.0.2']);
+    expect(store.currentTv!.serverFingerprint, isNotNull);
+    // The other TV was tried and refused for its different identity.
+    expect(other.events.any((e) => e['event'] == 'remote_connected'), isFalse);
+
+    controller.press(KeyCode.channelUp);
+    expect((await tv.waitFor('key'))['code'], KeyCode.channelUp);
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
 }

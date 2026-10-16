@@ -169,6 +169,27 @@ async def main() -> None:
         assert (await asyncio.to_thread(mock.wait, "power"))["on"] is True
 
         remote.disconnect()
+
+        # Moving to another network keeps the identity and the pairing.
+        mock.command("move 127.0.0.2")
+        moved = await asyncio.to_thread(mock.wait, "moved")
+        assert moved["host"] == "127.0.0.2", moved
+        try:
+            await remote.async_connect()
+            raise AssertionError("the old address still answers")
+        except CannotConnect:
+            pass
+        roamed = AndroidTVRemote(
+            "HAAM Remote",
+            os.path.join(tmp, "cert.pem"),
+            os.path.join(tmp, "key.pem"),
+            "127.0.0.2",
+            api_port=moved["remote_port"],
+            pair_port=moved["pair_port"],
+        )
+        await roamed.async_connect()
+        assert roamed.device_info and roamed.device_info["model"] == "R4"
+        roamed.disconnect()
         print("mock TV validated against androidtvremote2: OK")
     finally:
         mock.close()

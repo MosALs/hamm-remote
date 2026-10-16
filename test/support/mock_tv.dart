@@ -91,6 +91,13 @@ class MockTv {
     await waitFor('asleep');
   }
 
+  /// Joins another network: same TV and identity, now at [host].
+  Future<void> moveTo(String host) async {
+    _process.stdin.writeln('move $host');
+    await _process.stdin.flush();
+    await waitFor('moved');
+  }
+
   Future<void> close() async {
     await _process.stdin.close();
     _process.kill();
