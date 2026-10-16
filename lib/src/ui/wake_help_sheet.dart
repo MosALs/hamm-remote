@@ -58,12 +58,13 @@ class _WakeHelpSheet extends StatelessWidget {
                 ));
               },
               icon: const Icon(Icons.wifi_tethering_rounded, size: 20),
-              label: const Text('Keep the TV reachable when off'),
+              label: const Text('Try keeping the TV reachable when off'),
             ),
             const SizedBox(height: 10),
             const Text(
-              'Some TVs have a setting for this instead: Wake on LAN, Wake on Wireless LAN, '
-              'Network standby or Quick start, under Network or Power.',
+              'Works on TVs that respect it; some still switch their Wi-Fi off. Other TVs have a setting '
+              'instead: Wake on LAN, Network standby or Quick start, under Network or Power. '
+              'If neither works, turn the TV on with its own remote.',
               style: TextStyle(fontSize: 13, height: 1.4, color: Palette.muted),
             ),
             const SizedBox(height: 14),

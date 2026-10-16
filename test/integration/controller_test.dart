@@ -315,4 +315,65 @@ void main() {
     expect(parseKeepAwakeState('package:$keepAwakePackage\n2\n'), KeepAwakeState.on);
     expect(parseKeepAwakeState('package:${keepAwakePackage}x\n1\n'), KeepAwakeState.off);
   });
+
+  test('controls the TV from outside home through its away address', () async {
+    SharedPreferences.setMockInitialValues({});
+    final tv = await MockTv.start();
+    addTearDown(tv.close);
+    final adb = await MockAdb.start();
+    addTearDown(adb.close);
+    final store = await AppStore.open();
+    final controller = RemoteController(
+      store: store,
+      identity: identity,
+      tvFinder: () async => const [],
+      adbConnector: (_, key, onApproval) =>
+          AdbClient.connect(host: '127.0.0.1', port: adb.port, key: key, onApprovalNeeded: onApproval),
+    );
+    addTearDown(controller.dispose);
+    await controller.selectTv(SavedTv(
+      name: 'Living room',
+      host: '127.0.0.1',
+      remotePort: tv.remotePort,
+      pairingPort: tv.pairPort,
+    ));
+    final pairing = await controller.startPairing();
+    await controller.finishPairing(pairing, (await tv.waitFor('pairing_code'))['code'] as String);
+    await waitUntil(() => controller.isConnected);
+    expect(controller.isAway, isFalse);
+
+    // At home, the app reads the TV's Tailscale address over ADB.
+    await controller.enableAdb();
+    expect(await controller.detectAwayHost(), '100.101.102.103');
+
+    // A wrong address is caught before saving.
+    expect(await controller.testAwayHost('127.0.0.3'), contains('did not answer'));
+
+    // The away address (here 127.0.0.2 stands in for the Tailscale address).
+    await controller.setAwayHost('127.0.0.2');
+    expect(store.currentTv!.awayHost, '127.0.0.2');
+
+    // Out of home: the home address no longer answers, the away one does.
+    await tv.moveTo('127.0.0.2');
+    await waitUntil(() => controller.isConnected && controller.isAway, timeout: const Duration(seconds: 20));
+    expect(controller.tv!.host, '127.0.0.1', reason: 'the home address is kept for when the phone is back');
+    expect(await controller.testAwayHost('127.0.0.2'), isNull);
+    controller.press(KeyCode.power);
+    expect((await tv.waitFor('key'))['code'], KeyCode.power);
+
+    // Back home: the home address is used again.
+    await tv.moveTo('127.0.0.1');
+    await waitUntil(() => controller.isConnected && !controller.isAway, timeout: const Duration(seconds: 20));
+    controller.press(KeyCode.channelUp);
+    expect((await tv.waitFor('key'))['code'], KeyCode.channelUp);
+
+    await controller.setAwayHost(null);
+    expect(store.currentTv!.awayHost, isNull);
+  }, skip: unavailable, timeout: const Timeout(Duration(minutes: 2)));
+
+  test('finds the Tailscale address among the TV addresses', () {
+    expect(parseTailscaleAddress('9: wlan0    inet 192.168.8.127/24 brd\n14: tun0    inet 100.64.1.2/32 scope'), '100.64.1.2');
+    expect(parseTailscaleAddress('inet 100.128.0.1/32'), isNull, reason: 'outside 100.64.0.0/10');
+    expect(parseTailscaleAddress('inet 10.0.0.2/24'), isNull);
+  });
 }

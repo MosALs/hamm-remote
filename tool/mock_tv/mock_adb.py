@@ -136,6 +136,13 @@ class MockAdb:
         if command.startswith("ip -o link"):
             # Like the real shell: the `ip` listing, then the sysfs fallback lines.
             out = INTERFACES + "wlan0 aa:bb:cc:dd:ee:10\neth0 aa:bb:cc:dd:ee:0f\n"
+        if command.startswith("ip -o -4 addr"):
+            # Wi-Fi plus Tailscale's tunnel, as on a TV running Tailscale.
+            out = (
+                "1: lo    inet 127.0.0.1/8 scope host lo\\       valid_lft forever preferred_lft forever\n"
+                "9: wlan0    inet 192.168.8.127/24 brd 192.168.8.255 scope global wlan0\\       valid_lft forever\n"
+                "14: tun0    inet 100.101.102.103/32 scope global tun0\\       valid_lft forever preferred_lft forever\n"
+            )
         with self.lock:
             if f"pm list packages {HELPER}" in command and HELPER in self.installed:
                 out += f"package:{HELPER}\n"

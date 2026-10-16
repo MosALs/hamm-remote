@@ -17,6 +17,7 @@ class SavedTv {
     this.adbEnabled = false,
     this.mac,
     this.interfaceMacs = const [],
+    this.awayHost,
   });
 
   final String name;
@@ -37,6 +38,10 @@ class SavedTv {
   /// MAC addresses of the TV's network interfaces (Wi-Fi, Ethernet), read
   /// over ADB. The certificate's [mac] is not always the interface in use.
   final List<String> interfaceMacs;
+
+  /// The TV's address on a private network that also works away from home
+  /// (Tailscale), tried alongside [host].
+  final String? awayHost;
 
   /// Every address worth sending a wake-up packet to, without duplicates.
   List<String> get wakeMacs => {
@@ -63,6 +68,20 @@ class SavedTv {
         adbEnabled: adbEnabled ?? this.adbEnabled,
         mac: mac ?? this.mac,
         interfaceMacs: interfaceMacs ?? this.interfaceMacs,
+        awayHost: awayHost,
+      );
+
+  /// A copy with [awayHost] set, or cleared when null.
+  SavedTv withAwayHost(String? awayHost) => SavedTv(
+        name: name,
+        host: host,
+        remotePort: remotePort,
+        pairingPort: pairingPort,
+        serverFingerprint: serverFingerprint,
+        adbEnabled: adbEnabled,
+        mac: mac,
+        interfaceMacs: interfaceMacs,
+        awayHost: awayHost,
       );
 
   Map<String, Object?> toJson() => {
@@ -74,6 +93,7 @@ class SavedTv {
         'adb': adbEnabled,
         'mac': mac,
         'ifMacs': interfaceMacs,
+        'away': awayHost,
       };
 
   static SavedTv? fromJson(Object? json) {
@@ -97,6 +117,7 @@ class SavedTv {
           for (final m in list)
             if (m is String) m,
       ],
+      awayHost: json['away'] is String ? json['away'] as String : null,
     );
   }
 }

@@ -9,6 +9,7 @@ import 'package:haam_remote/src/crypto/identity.dart';
 import 'package:haam_remote/src/protocol/errors.dart';
 import 'package:haam_remote/src/protocol/pairing.dart';
 import 'package:haam_remote/src/protocol/remote_session.dart';
+import 'package:haam_remote/src/ui/away_screen.dart';
 import 'package:haam_remote/src/ui/connect_screen.dart';
 import 'package:haam_remote/src/ui/keep_awake_screen.dart';
 import 'package:haam_remote/src/ui/remote_screen.dart';
@@ -215,6 +216,26 @@ void main() {
     await tester.pumpWidget(const SizedBox());
     controller.dispose();
   });
+
+  for (final size in _sizes) {
+    testWidgets('outside-home screen fits ${size.width.toInt()}x${size.height.toInt()}', (tester) async {
+      tester.view.physicalSize = size * 3;
+      tester.view.devicePixelRatio = 3;
+      addTearDown(tester.view.reset);
+      final controller = await tester.runAsync(() => makeController(
+            current: const SavedTv(name: 'TV', host: '192.168.1.20', serverFingerprint: 'pinned', awayHost: '100.64.1.2'),
+          ));
+      await tester.pumpWidget(app(AwayScreen(controller: controller!), textScale: 1.3));
+      await tester.pump();
+      expect(find.text('Control from outside home'), findsOneWidget);
+      expect(find.text('Save and test'), findsOneWidget);
+      expect(find.textContaining('Set up: 100.64.1.2'), findsOneWidget);
+      expect(find.text('Stop using it'), findsOneWidget);
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(const SizedBox());
+      controller.dispose();
+    });
+  }
 
   testWidgets('a never-paired TV opens pairing by itself', (tester) async {
     final controller = await tester.runAsync(() => makeController(

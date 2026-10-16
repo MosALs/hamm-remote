@@ -13,6 +13,7 @@ import 'package:haam_remote/src/crypto/identity.dart';
 import 'package:haam_remote/src/protocol/errors.dart';
 import 'package:haam_remote/src/protocol/pairing.dart';
 import 'package:haam_remote/src/protocol/remote_session.dart';
+import 'package:haam_remote/src/ui/away_screen.dart';
 import 'package:haam_remote/src/ui/connect_screen.dart';
 import 'package:haam_remote/src/ui/keep_awake_screen.dart';
 import 'package:haam_remote/src/ui/remote_screen.dart';
@@ -134,6 +135,16 @@ void main() {
         ));
     await show(tester, KeepAwakeScreen(controller: c!));
     await snap('keep_awake');
+    await tester.pumpWidget(const SizedBox());
+    c.dispose();
+  }));
+
+  testWidgets('away', (tester) => withShadows(() async {
+    final c = await tester.runAsync(() => controller(
+          current: const SavedTv(name: 'Living room', host: '192.168.1.20', serverFingerprint: 'x', adbEnabled: true),
+        ));
+    await show(tester, AwayScreen(controller: c!));
+    await snap('away');
     await tester.pumpWidget(const SizedBox());
     c.dispose();
   }));

@@ -124,6 +124,10 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _retry;
   int _failures = 0;
   DateTime? _lastSearch;
+
+  /// The address the current session uses: the home one, or the TV's away
+  /// address (Tailscale) when the phone is out.
+  String? _activeHost;
   Future<bool>? _waking;
   DateTime? _wakeUntil;
   bool _wakeFailed = false;
@@ -136,6 +140,12 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
   String? get message => _message;
   VolumeInfo? get volume => _volume;
   bool get isConnected => _state == LinkState.connected;
+
+  /// Connected through the TV's away address (e.g. from outside home).
+  bool get isAway {
+    final tv = _tv;
+    return isConnected && tv != null && _activeHost != null && _activeHost != tv.host;
+  }
 
   /// True while [wake] is signalling the TV.
   bool get isWaking => _waking != null;
@@ -191,6 +201,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     _disconnect();
     _closeAdb();
     _tv = chosen;
+    _activeHost = null;
     _failures = 0;
     _set(chosen.isPaired ? LinkState.connecting : LinkState.needsPairing, null);
     if (chosen.isPaired) await connect();
@@ -257,11 +268,13 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     _retry?.cancel();
     if (_state != LinkState.connected) _set(LinkState.connecting, null);
     try {
-      final session = await connector(tv, _identity);
+      final (session, usedHost) = await _connectBest(tv);
       if (_disposed || _tv?.host != tv.host || !_foreground) {
         session.close();
         return;
       }
+      if (usedHost != _activeHost) _closeAdb(); // ADB follows the address in use
+      _activeHost = usedHost;
       _attach(session);
       _failures = 0;
       final mac = session.serverMac;
@@ -288,6 +301,36 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       _set(LinkState.offline, 'Connection failed: $e');
       _scheduleRetry();
     }
+  }
+
+  /// Connects at home and through the away address at the same time and keeps
+  /// whichever answers first, so neither waits for the other to time out.
+  /// Both check the TV's pinned identity. When both fail, the home error is
+  /// reported.
+  Future<(RemoteSession, String)> _connectBest(SavedTv tv) {
+    final away = tv.awayHost;
+    if (away == null || away == tv.host) {
+      return connector(tv, _identity).then((s) => (s, tv.host));
+    }
+    final done = Completer<(RemoteSession, String)>();
+    final errors = <String, Object>{};
+    final hosts = [tv.host, away];
+    for (final host in hosts) {
+      unawaited(connector(tv.copyWith(host: host), _identity).then(
+        (session) {
+          if (done.isCompleted) {
+            session.close();
+          } else {
+            done.complete((session, host));
+          }
+        },
+        onError: (Object e) {
+          errors[host] = e;
+          if (errors.length == hosts.length && !done.isCompleted) done.completeError(errors[tv.host]!);
+        },
+      ));
+    }
+    return done.future;
   }
 
   /// The TV may have moved to another address, for example after joining
@@ -326,6 +369,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       await _store.saveTv(moved);
       await _store.setCurrentTvHost(moved.host);
       _tv = moved;
+      _activeHost = moved.host;
       _attach(session);
       _failures = 0;
       _volume = session.volume;
@@ -505,7 +549,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     final tv = _tv;
     if (tv == null) throw StateError('No TV selected');
     _closeAdb();
-    final client = await adbConnector(tv, _key, onApprovalNeeded ?? () {});
+    final client = await adbConnector(tv.copyWith(host: _activeHost ?? tv.host), _key, onApprovalNeeded ?? () {});
     if (_disposed || _tv?.host != tv.host) {
       client.close();
       return;
@@ -517,6 +561,47 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     _tv = updated;
     notifyListeners();
     await _learnInterfaceMacs(client);
+  }
+
+  // --------------------------------------------------------------------
+  // Control from outside home (the TV's away address)
+  // --------------------------------------------------------------------
+
+  /// Reads the TV's Tailscale address over ADB (the TV must be reachable,
+  /// so at home). Null when Tailscale is not running on the TV.
+  Future<String?> detectAwayHost() async {
+    final client = await _adbClient();
+    return parseTailscaleAddress(await client.shell(addressListCommand));
+  }
+
+  /// Checks that the TV answers at [host] with its pinned identity. Returns
+  /// null when it does, or what went wrong.
+  Future<String?> testAwayHost(String host) async {
+    final tv = _tv;
+    if (tv == null) return 'No TV selected.';
+    try {
+      final session = await connector(tv.copyWith(host: host), _identity);
+      session.close();
+      return null;
+    } on TvNeedsPairing {
+      return 'Something answered at $host, but it is not this TV.';
+    } on TvException catch (e) {
+      return e is TvUnreachable ? 'The TV did not answer at $host. Is Tailscale on, on both the phone and the TV?' : e.message;
+    } on Object catch (e) {
+      return '$e';
+    }
+  }
+
+  /// Saves (or clears) the away address; the next connection uses it.
+  Future<void> setAwayHost(String? host) async {
+    final tv = _tv;
+    if (tv == null) return;
+    final cleaned = host?.trim();
+    final updated = tv.withAwayHost(cleaned == null || cleaned.isEmpty ? null : cleaned);
+    await _store.saveTv(updated);
+    _tv = updated;
+    notifyListeners();
+    if (!isConnected) unawaited(connect());
   }
 
   // --------------------------------------------------------------------
@@ -625,6 +710,7 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
       serverFingerprint: tv.serverFingerprint,
       mac: tv.mac,
       interfaceMacs: tv.interfaceMacs,
+      awayHost: tv.awayHost,
     );
     await _store.saveTv(updated);
     _tv = updated;
@@ -637,7 +723,8 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     if (open != null && open.isOpen) return Future.value(open);
     final pending = _adbConnecting;
     if (pending != null) return pending;
-    final tv = _tv!;
+    final saved = _tv!;
+    final tv = saved.copyWith(host: _activeHost ?? saved.host);
     final future = adbConnector(tv, _key, () {
       _adbError = 'Allow debugging on the TV (tick "Always allow").';
       notifyListeners();
@@ -783,6 +870,19 @@ class RemoteController extends ChangeNotifier with WidgetsBindingObserver {
     adbSuggestions.dispose();
     super.dispose();
   }
+}
+
+/// Lists the TV's IPv4 addresses (for its Tailscale address).
+const String addressListCommand = 'ip -o -4 addr show';
+
+/// Picks the Tailscale address (100.64.0.0/10) from `ip -o -4 addr` output.
+String? parseTailscaleAddress(String output) {
+  for (final m in RegExp(r'inet (\d+)\.(\d+)\.(\d+)\.(\d+)').allMatches(output)) {
+    final a = int.parse(m.group(1)!);
+    final b = int.parse(m.group(2)!);
+    if (a == 100 && b >= 64 && b <= 127) return '$a.$b.${m.group(3)}.${m.group(4)}';
+  }
+  return null;
 }
 
 /// The TV helper that keeps the TV reachable while its screen is off

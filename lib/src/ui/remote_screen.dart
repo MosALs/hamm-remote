@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../app/remote_controller.dart';
 import '../protocol/keycodes.dart';
 import 'adb_setup_screen.dart';
+import 'away_screen.dart';
 import 'pairing_screen.dart';
 import 'tabs/apps_tab.dart';
 import 'tabs/cast_tab.dart';
@@ -96,6 +97,10 @@ class _RemoteScreenState extends State<RemoteScreen> {
         await _openPairing();
       case 'adb':
         await _openAdbSetup();
+      case 'away':
+        if (mounted) {
+          await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => AwayScreen(controller: c)));
+        }
       case 'wake':
         if (mounted) await showWakeHelpSheet(context, c);
       case 'switch':
@@ -164,7 +169,10 @@ class _Header extends StatelessWidget {
     final tv = controller.tv;
     final volume = controller.volume;
     final (Color dot, String status) = switch (controller.state) {
-      LinkState.connected => (Palette.ok, volume == null ? 'Connected' : 'Connected · Vol ${volume.level}'),
+      LinkState.connected => (
+          Palette.ok,
+          [if (controller.isAway) 'Away' else 'Connected', if (volume != null) 'Vol ${volume.level}'].join(' · ')
+        ),
       LinkState.connecting => (Palette.warning, controller.message ?? 'Connecting…'),
       LinkState.offline => (Palette.red, 'Offline'),
       LinkState.needsPairing => (Palette.warning, 'Not paired'),
@@ -314,6 +322,7 @@ class _TvMenu extends StatelessWidget {
             adbOn ? 'TV keys over ADB: on' : 'Fix TV keys (ADB)',
             'Input, Settings, sources and coloured keys',
           ),
+          item('away', Icons.public_rounded, 'Control from outside home', 'Use the remote from anywhere'),
           item('wake', Icons.power_settings_new_rounded, 'Turning on from the phone', 'If the TV won\'t turn on'),
           item('pair', Icons.link_rounded, 'Pair again', 'If the TV stopped responding'),
           item('switch', Icons.swap_horiz_rounded, 'Switch TV', 'Pick another TV'),
@@ -410,8 +419,8 @@ class _StatusBanner extends StatelessWidget {
         ),
       LinkState.offline when controller.wakeFailed => _banner(
           icon: Icons.power_settings_new_rounded,
-          text: 'The TV didn\'t wake up. A TV setting can fix this.',
-          action: 'Fix',
+          text: 'The TV didn\'t wake up. Turn it on with its remote.',
+          action: 'Why?',
           onAction: onWakeHelp,
         ),
       LinkState.offline when controller.tv?.wakeMacs.isNotEmpty ?? false => _banner(
