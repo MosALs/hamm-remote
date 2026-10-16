@@ -229,9 +229,11 @@ void main() {
       await tester.pump();
       expect(find.text('Control from outside home'), findsOneWidget);
       // The page scrolls on small screens; everything must be reachable.
-      await tester.scrollUntilVisible(find.textContaining('Set up: 100.64.1.2'), 150);
-      await tester.scrollUntilVisible(find.text('Save and test'), 150);
-      await tester.scrollUntilVisible(find.text('Stop using it'), 150);
+      // (The text field has its own scrollable; scroll the page itself.)
+      final page = find.byType(Scrollable).first;
+      await tester.scrollUntilVisible(find.textContaining('Set up: 100.64.1.2'), 150, scrollable: page);
+      await tester.scrollUntilVisible(find.text('Save and test'), 150, scrollable: page);
+      await tester.scrollUntilVisible(find.text('Stop using it'), 150, scrollable: page);
       expect(tester.takeException(), isNull);
       await tester.pumpWidget(const SizedBox());
       controller.dispose();
